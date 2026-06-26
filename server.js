@@ -4,6 +4,7 @@ const { config } = require('./src/env');
 const { verifyMetaSignature, sendWhatsAppText } = require('./src/whatsapp');
 const { processWebhookPayload, simulateIncomingMessage } = require('./src/processor');
 const { supabase } = require('./src/supabaseClient');
+const { exchangeCodeForToken, upsertIntegration, getIntegrationStatus } = require('./src/metaSignup');
 const { getEmpresaByPhoneNumberId, saveConversation, upsertLead, saveWebhookLog } = require('./src/db');
 const { onlyDigits } = require('./src/utils');
 
@@ -41,7 +42,8 @@ app.get('/health', async (_req, res) => {
     ok: !error,
     supabase: error ? error.message : 'ok',
     ai_provider: config.aiProvider,
-    meta_api_version: config.metaApiVersion
+    meta_api_version: config.metaApiVersion,
+    embedded_signup: Boolean(config.metaAppId && config.metaConfigId)
   });
 });
 
@@ -113,6 +115,90 @@ app.post('/api/send-text', requireDashboardKey, async (req, res) => {
     res.json({ ok: true, meta, conversation: conv });
   } catch (error) {
     console.error('[api/send-text]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+
+
+// ==============================
+// V15: Embedded Signup / SaaS multiempresa
+// ==============================
+app.get('/api/meta/config', requireDashboardKey, (_req, res) => {
+  res.json({
+    ok: true,
+    app_id: config.metaAppId || '',
+    config_id: config.metaConfigId || '',
+    api_version: config.metaApiVersion,
+    redirect_uri: config.metaRedirectUri || `${config.publicBaseUrl}/meta/callback`,
+    webhook_url: `${config.publicBaseUrl}/webhook`,
+    ready: Boolean(config.metaAppId && config.metaAppSecret && config.metaConfigId)
+  });
+});
+
+// Pantalla simple por si Meta redirige a callback. En el flujo JS normalmente se usa /api/meta/embedded-signup.
+app.get('/meta/callback', (req, res) => {
+  const code = req.query.code || '';
+  const state = req.query.state || '';
+  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>GO USA Meta Callback</title></head><body style="font-family:Arial;padding:24px"><h2>Meta devolvió autorización</h2><p>Copia el code en el panel si no se cerró automático.</p><textarea style="width:100%;height:130px">${String(code).replace(/</g,'&lt;')}</textarea><p>state: ${String(state).replace(/</g,'&lt;')}</p></body></html>`);
+});
+
+// Recibe el resultado de Embedded Signup o conexión manual del cliente.
+app.post('/api/meta/embedded-signup', requireDashboardKey, async (req, res) => {
+  try {
+    const empresaId = req.body.empresa_id || req.body.empresaId || config.defaultEmpresaId;
+    const code = req.body.code || '';
+    const accessTokenManual = req.body.access_token || req.body.accessToken || '';
+    const accessToken = accessTokenManual || await exchangeCodeForToken({ code, redirectUri: req.body.redirect_uri });
+
+    const integration = await upsertIntegration({
+      empresaId,
+      businessId: req.body.business_id || req.body.businessId,
+      wabaId: req.body.waba_id || req.body.wabaId,
+      phoneNumberId: req.body.phone_number_id || req.body.phoneNumberId,
+      displayPhoneNumber: req.body.display_phone_number || req.body.displayPhoneNumber,
+      accessToken,
+      tokenTipo: code ? 'embedded_signup_code' : 'manual_or_client_token',
+      pagoMetaEstado: req.body.pago_meta_estado || req.body.pagoMetaEstado || 'pendiente',
+      metadata: {
+        source: 'api_meta_embedded_signup',
+        raw_body: { ...req.body, access_token: accessToken ? '[REDACTED]' : undefined, accessToken: undefined }
+      }
+    });
+
+    res.json({ ok: true, integration });
+  } catch (error) {
+    console.error('[api/meta/embedded-signup]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// Atajo manual para instalar un cliente mientras Embedded Signup queda aprobado/configurado.
+app.post('/api/meta/manual-connect', requireDashboardKey, async (req, res) => {
+  try {
+    const integration = await upsertIntegration({
+      empresaId: req.body.empresa_id || req.body.empresaId || config.defaultEmpresaId,
+      businessId: req.body.business_id || req.body.businessId,
+      wabaId: req.body.waba_id || req.body.wabaId,
+      phoneNumberId: req.body.phone_number_id || req.body.phoneNumberId,
+      displayPhoneNumber: req.body.display_phone_number || req.body.displayPhoneNumber,
+      accessToken: req.body.access_token || req.body.accessToken,
+      tokenTipo: 'manual_cliente',
+      pagoMetaEstado: req.body.pago_meta_estado || req.body.pagoMetaEstado || 'cliente_meta',
+      metadata: { source: 'manual_connect' }
+    });
+    res.json({ ok: true, integration });
+  } catch (error) {
+    console.error('[api/meta/manual-connect]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/empresa/:empresaId/whatsapp-status', requireDashboardKey, async (req, res) => {
+  try {
+    const integrations = await getIntegrationStatus(req.params.empresaId);
+    res.json({ ok: true, integrations });
+  } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
 });

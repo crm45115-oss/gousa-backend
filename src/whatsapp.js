@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { config } = require('./env');
 const { onlyDigits } = require('./utils');
+const { supabase } = require('./supabaseClient');
 
 function verifyMetaSignature(req) {
   if (!config.metaAppSecret) return true;
@@ -15,6 +16,23 @@ function verifyMetaSignature(req) {
   } catch (_) {
     return false;
   }
+}
+
+
+async function resolveAccessToken(phoneNumberId) {
+  if (phoneNumberId) {
+    const { data, error } = await supabase
+      .from('whatsapp_integraciones')
+      .select('access_token')
+      .eq('phone_number_id', phoneNumberId)
+      .in('estado', ['conectado', 'pendiente'])
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) console.error('[resolveAccessToken]', error.message);
+    if (data?.access_token) return data.access_token;
+  }
+  return config.metaAccessToken;
 }
 
 function extractIncomingEvents(payload = {}) {
@@ -68,11 +86,13 @@ async function sendWhatsAppText({ to, text, phoneNumberId = config.phoneNumberId
   const cleanTo = onlyDigits(to);
   if (!cleanTo) throw new Error('Falta destinatario WhatsApp.');
 
+  const accessToken = await resolveAccessToken(phoneNumberId);
+  if (!accessToken) throw new Error('Falta access token de WhatsApp para este número.');
   const url = `https://graph.facebook.com/${config.metaApiVersion}/${phoneNumberId}/messages`;
   const response = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${config.metaAccessToken}`,
+      Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -94,11 +114,13 @@ async function sendWhatsAppText({ to, text, phoneNumberId = config.phoneNumberId
 
 async function markMessageRead({ messageId, phoneNumberId = config.phoneNumberId }) {
   if (!messageId || !phoneNumberId) return null;
+  const accessToken = await resolveAccessToken(phoneNumberId);
+  if (!accessToken) throw new Error('Falta access token de WhatsApp para este número.');
   const url = `https://graph.facebook.com/${config.metaApiVersion}/${phoneNumberId}/messages`;
   const response = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${config.metaAccessToken}`,
+      Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -110,4 +132,4 @@ async function markMessageRead({ messageId, phoneNumberId = config.phoneNumberId
   return response.json().catch(() => null);
 }
 
-module.exports = { verifyMetaSignature, extractIncomingEvents, sendWhatsAppText, markMessageRead };
+module.exports = { verifyMetaSignature, extractIncomingEvents, sendWhatsAppText, markMessageRead, resolveAccessToken };

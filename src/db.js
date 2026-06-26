@@ -4,6 +4,18 @@ const { onlyDigits, nowIso } = require('./utils');
 
 async function getEmpresaByPhoneNumberId(phoneNumberId = '') {
   if (phoneNumberId) {
+    // V15 multiempresa: primero busca la integración del cliente.
+    const { data: integration, error: integrationError } = await supabase
+      .from('whatsapp_integraciones')
+      .select('*, empresas(*)')
+      .eq('phone_number_id', phoneNumberId)
+      .in('estado', ['conectado', 'pendiente'])
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (integrationError) console.error('[getIntegrationByPhoneNumberId]', integrationError.message);
+    if (integration?.empresas?.activo) return integration.empresas;
+
     const { data, error } = await supabase
       .from('empresas')
       .select('*')
@@ -34,6 +46,21 @@ async function getEmpresaByPhoneNumberId(phoneNumberId = '') {
   if (error) throw error;
   if (!data) throw new Error('No existe empresa activa en Supabase. Ejecuta el SQL primero.');
   return data;
+}
+
+
+async function getWhatsAppIntegrationByPhoneNumberId(phoneNumberId = '') {
+  if (!phoneNumberId) return null;
+  const { data, error } = await supabase
+    .from('whatsapp_integraciones')
+    .select('*')
+    .eq('phone_number_id', phoneNumberId)
+    .in('estado', ['conectado', 'pendiente'])
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) console.error('[getWhatsAppIntegrationByPhoneNumberId]', error.message);
+  return data || null;
 }
 
 async function getIaConfig(empresaId) {
@@ -225,6 +252,7 @@ async function saveMessageStatus({ empresaId, payload }) {
 
 module.exports = {
   getEmpresaByPhoneNumberId,
+  getWhatsAppIntegrationByPhoneNumberId,
   getIaConfig,
   getKnowledge,
   upsertLead,
