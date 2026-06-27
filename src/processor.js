@@ -8,7 +8,9 @@ const {
   getConversationHistory,
   updateLeadFromAi,
   saveWebhookLog,
-  saveMessageStatus
+  saveMessageStatus,
+  setConversationIaPaused,
+  isConversationPaused
 } = require('./db');
 const { extractIncomingEvents, sendWhatsAppText, markMessageRead } = require('./whatsapp');
 const { extractEvolutionMessages, sendEvolutionText, normalizeEvolutionEvent } = require('./evolution');
@@ -174,6 +176,7 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     const resolved = await getEmpresaByEvolutionInstance(event.instanceName);
     empresa = resolved.empresa;
     integration = resolved.integration;
+
     lead = await upsertLead({
       empresaId: empresa.id,
       telefono: event.from,
@@ -182,20 +185,47 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
       incomingText: event.text
     });
 
+    // 1) Guardar siempre el mensaje real en historial.
     await saveConversation({
       empresaId: empresa.id,
       leadId: lead.id,
       telefono: event.from,
-      rol: 'cliente',
+      rol: event.fromMe ? 'asesor' : 'cliente',
       mensaje: event.text,
       tipo: event.type,
       waMessageId: event.waMessageId,
-      metadata: { evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName }
+      metadata: { provider: 'evolution', evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName, from_me: event.fromMe }
     });
+
+    // 2) Si el negocio respondió desde el celular, pausar IA para esa clienta.
+    if (event.fromMe) {
+      const cmd = String(event.text || '').trim().toLowerCase();
+      if (cmd === '/ia on' || cmd === 'ia on') {
+        await setConversationIaPaused({ empresaId: empresa.id, telefono: event.from, paused: false });
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_ia_reactivated_by_whatsapp', payload: event, estado: 'ok' });
+        return { ok: true, skipped: true, reason: 'ia_reactivada', telefono: event.from };
+      }
+      if (cmd === '/ia off' || cmd === 'ia off') {
+        await setConversationIaPaused({ empresaId: empresa.id, telefono: event.from, paused: true, motivo: 'comando_ia_off' });
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_ia_paused_by_command', payload: event, estado: 'ok' });
+        return { ok: true, skipped: true, reason: 'ia_pausada_comando', telefono: event.from };
+      }
+
+      await setConversationIaPaused({ empresaId: empresa.id, telefono: event.from, paused: true, motivo: 'asesor_respondio_desde_celular' });
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_ia_paused_by_human_reply', payload: event, estado: 'ok' });
+      return { ok: true, skipped: true, reason: 'from_me_human_takeover', telefono: event.from };
+    }
 
     if (lead.bloqueado) {
       await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_message_blocked_lead', payload: event, estado: 'ok' });
       return { ok: true, skipped: true, reason: 'lead_bloqueado', telefono: event.from };
+    }
+
+    // 3) Si una persona tomó control, guardar mensaje pero NO responder con IA.
+    const paused = await isConversationPaused({ empresaId: empresa.id, telefono: event.from });
+    if (paused) {
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_message_saved_ia_paused', payload: event, estado: 'ok' });
+      return { ok: true, skipped: true, reason: 'ia_pausada', telefono: event.from };
     }
 
     const [iaConfig, knowledge, history] = await Promise.all([
@@ -214,7 +244,7 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
       rol: ai.requiere_asesor ? 'sistema' : 'ia',
       mensaje: ai.respuesta,
       tipo: 'text',
-      metadata: { ai, provider: 'evolution', instanceName: event.instanceName, requires_human: ai.requiere_asesor }
+      metadata: { ai, provider: 'evolution', instanceName: event.instanceName, requires_human: ai.requiere_asesor, from_me: true }
     });
 
     const evoResponse = await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: ai.respuesta });
@@ -241,6 +271,7 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     return { ok: false, provider: 'evolution', telefono: event.from, error: error.message };
   }
 }
+
 
 async function simulateIncomingMessage({ phoneNumberId, from, name, text }) {
   const fakePayload = {

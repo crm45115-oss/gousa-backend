@@ -140,7 +140,7 @@ function extractEvolutionMessages(payload = {}) {
   for (const item of items) {
     if (!item || typeof item !== 'object') continue;
     const key = item.key || item.message?.key || {};
-    if (key.fromMe === true || item.fromMe === true) continue;
+    const fromMe = key.fromMe === true || item.fromMe === true;
     const remoteJid = key.remoteJid || item.remoteJid || item.sender || item.from || item.chatId || '';
     const from = onlyDigits(String(remoteJid).split('@')[0]);
     if (!from) continue;
@@ -167,6 +167,7 @@ function extractEvolutionMessages(payload = {}) {
       type,
       waMessageId: key.id || item.id || `evo.${Date.now()}`,
       contactName: item.pushName || item.senderName || item.name || '',
+      fromMe,
       rawMessage: item
     });
   }
