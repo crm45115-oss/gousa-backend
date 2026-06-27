@@ -22,7 +22,7 @@ function buildPrompt({ empresa, iaConfig, knowledge, lead, history, incomingText
     .join('\n');
 
   return `
-Eres ${iaConfig.nombre_asistente || 'Asistente GO USA'}, asistente de WhatsApp de ${empresa.nombre || 'GO USA Asesores de Viaje'}.
+Eres ${iaConfig.nombre_asistente || 'Asistente la empresa'}, asistente de WhatsApp de ${empresa.nombre || 'la empresa Asesores de Viaje'}.
 
 OBJETIVO:
 Responder por WhatsApp, captar datos del cliente y avanzar la venta sin inventar requisitos, precios finales ni prometer aprobación de visa.
@@ -156,7 +156,7 @@ function normalizeAiResponse(text) {
   const parsed = extractJsonObject(text);
   if (!parsed) {
     return {
-      respuesta: limitText(text || 'Gracias por escribir. Un asesor de GO USA te responderá en breve.', 1200),
+      respuesta: limitText(text || 'Gracias por escribir. Un asesor de la empresa te responderá en breve.', 1200),
       requiere_asesor: true,
       motivo_derivacion: 'La IA no devolvió JSON válido.',
       lead_updates: { requiere_asesor: true, estado: 'derivado_asesor' }
@@ -173,10 +173,10 @@ function normalizeAiResponse(text) {
 function mockReply({ incomingText, lead }) {
   const text = String(incomingText || '').toLowerCase();
   const requires = ['asesor', 'humano', 'precio', 'costo', 'pago', 'qr', 'negada', 'rechazo', 'revocada'].some((x) => text.includes(x));
-  let respuesta = '👋 Gracias por escribir a GO USA. Para ayudarte mejor, ¿cuál es tu nombre completo?';
+  let respuesta = '👋 Gracias por escribir a la empresa. Para ayudarte mejor, ¿cuál es tu nombre completo?';
   if (lead?.nombre_completo && !lead?.destino) respuesta = 'Perfecto. ¿A qué destino deseas viajar y cuál es el motivo del viaje?';
   else if (lead?.destino && !lead?.fecha_viaje) respuesta = 'Excelente. ¿Para qué fecha aproximada estás planificando tu viaje?';
-  else if (requires) respuesta = 'Perfecto, voy a dejar tu solicitud para que un asesor de GO USA te confirme los detalles exactos.';
+  else if (requires) respuesta = 'Perfecto, voy a dejar tu solicitud para que un asesor de la empresa te confirme los detalles exactos.';
   return {
     respuesta,
     requiere_asesor: requires,

@@ -1,7 +1,7 @@
 {
-  "name": "gousa-whatsapp-webhook-backend",
-  "version": "1.0.0",
-  "description": "Backend GO USA SaaS con Webhook Meta WhatsApp Cloud API + IA + Supabase",
+  "name": "chatflow360-whatsapp-webhook-backend",
+  "version": "1.1.0",
+  "description": "Backend ChatFlow 360 SaaS con Meta Cloud API + Evolution API QR asistido + IA + Supabase",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {

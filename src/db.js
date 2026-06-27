@@ -63,6 +63,23 @@ async function getWhatsAppIntegrationByPhoneNumberId(phoneNumberId = '') {
   return data || null;
 }
 
+
+async function getEmpresaByEvolutionInstance(instanceName = '') {
+  const clean = String(instanceName || '').trim();
+  if (!clean) throw new Error('Falta instanceName de Evolution.');
+  const { data, error } = await supabase
+    .from('whatsapp_integraciones')
+    .select('*, empresas(*)')
+    .or(`instance_name.eq.${clean},phone_number_id.eq.${clean}`)
+    .in('estado', ['conectado', 'pendiente', 'qr_pendiente'])
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) console.error('[getEmpresaByEvolutionInstance]', error.message);
+  if (data?.empresas) return { empresa: data.empresas, integration: data };
+  throw new Error(`No existe empresa para instancia Evolution: ${clean}`);
+}
+
 async function getIaConfig(empresaId) {
   const { data, error } = await supabase
     .from('ia_config')
@@ -253,6 +270,7 @@ async function saveMessageStatus({ empresaId, payload }) {
 module.exports = {
   getEmpresaByPhoneNumberId,
   getWhatsAppIntegrationByPhoneNumberId,
+  getEmpresaByEvolutionInstance,
   getIaConfig,
   getKnowledge,
   upsertLead,

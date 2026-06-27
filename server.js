@@ -2,9 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const { config } = require('./src/env');
 const { verifyMetaSignature, sendWhatsAppText } = require('./src/whatsapp');
-const { processWebhookPayload, simulateIncomingMessage } = require('./src/processor');
+const { processWebhookPayload, simulateIncomingMessage, processEvolutionWebhookPayload } = require('./src/processor');
 const { supabase } = require('./src/supabaseClient');
 const { exchangeCodeForToken, upsertIntegration, getIntegrationStatus } = require('./src/metaSignup');
+const { safeInstanceName, createEvolutionInstance, setEvolutionWebhook, connectEvolutionInstance, getEvolutionState, logoutEvolutionInstance, extractQrFromEvolution } = require('./src/evolution');
 const { getEmpresaByPhoneNumberId, saveConversation, upsertLead, saveWebhookLog } = require('./src/db');
 const { onlyDigits } = require('./src/utils');
 
@@ -30,7 +31,7 @@ function requireDashboardKey(req, res, next) {
 app.get('/', (_req, res) => {
   res.json({
     ok: true,
-    name: 'GO USA WhatsApp Webhook Backend',
+    name: 'ChatFlow 360 WhatsApp Webhook Backend',
     webhook_url: `${config.publicBaseUrl || 'https://TU-BACKEND'}/webhook`,
     health: '/health'
   });
@@ -43,7 +44,9 @@ app.get('/health', async (_req, res) => {
     supabase: error ? error.message : 'ok',
     ai_provider: config.aiProvider,
     meta_api_version: config.metaApiVersion,
-    embedded_signup: Boolean(config.metaAppId && config.metaConfigId)
+    embedded_signup: Boolean(config.metaAppId && config.metaConfigId),
+    whatsapp_provider: config.whatsappProvider,
+    evolution_ready: Boolean(config.evolutionApiUrl && config.evolutionApiKey)
   });
 });
 
@@ -77,13 +80,26 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+
+// Webhook QR asistido / Evolution API.
+app.post('/webhook/evolution', async (req, res) => {
+  try {
+    res.status(200).json({ ok: true, received: true });
+    const result = await processEvolutionWebhookPayload(req.body);
+    console.log('[EVOLUTION_WEBHOOK_PROCESSED]', JSON.stringify(result));
+  } catch (error) {
+    console.error('[EVOLUTION_WEBHOOK_ERROR]', error);
+    if (!res.headersSent) res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 // Prueba local: simula un mensaje entrante sin esperar a Meta.
 app.post('/api/simulate-message', requireDashboardKey, async (req, res) => {
   try {
     const phoneNumberId = req.body.phoneNumberId || config.phoneNumberId;
     const from = onlyDigits(req.body.from || req.body.telefono);
     const text = req.body.text || req.body.mensaje || 'Hola, quiero información';
-    const name = req.body.name || req.body.nombre || 'Cliente Demo';
+    const name = req.body.name || req.body.nombre || 'Cliente';
     const result = await simulateIncomingMessage({ phoneNumberId, from, name, text });
     res.json(result);
   } catch (error) {
@@ -121,6 +137,98 @@ app.post('/api/send-text', requireDashboardKey, async (req, res) => {
 
 
 
+
+// ==============================
+// V16.11: QR asistido con Evolution API
+// ==============================
+async function upsertEvolutionIntegration({ empresaId, instanceName, qrData = {}, estado = 'qr_pendiente' }) {
+  const payload = {
+    empresa_id: empresaId,
+    provider: 'evolution',
+    origen: 'evolution_qr',
+    phone_number_id: instanceName,
+    instance_name: instanceName,
+    display_phone_number: '',
+    token_tipo: 'evolution_qr',
+    estado,
+    pago_meta_estado: 'no_meta_qr',
+    permisos: {},
+    metadata: { qr: { ...qrData, raw: undefined }, provider: 'evolution' },
+    ultimo_qr_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+  const { data, error } = await supabase
+    .from('whatsapp_integraciones')
+    .upsert(payload, { onConflict: 'phone_number_id' })
+    .select('*')
+    .single();
+  if (error) throw error;
+  await supabase.from('empresas').update({
+    whatsapp_phone_number_id: instanceName,
+    estado_whatsapp: estado,
+    onboarding_estado: 'qr_pendiente',
+    webhook_backend: 'evolution_qr',
+    webhook_url: `${config.publicBaseUrl}/webhook/evolution`,
+    updated_at: new Date().toISOString()
+  }).eq('id', empresaId);
+  await saveWebhookLog({ empresaId, evento: 'evolution_qr_start', payload: { instanceName, qrData: { ...qrData, raw: undefined } }, estado: 'ok' }).catch(() => null);
+  return data;
+}
+
+app.post('/api/evolution/client/start', async (req, res) => {
+  try {
+    const empresaId = req.body.empresa_id || req.body.empresaId;
+    const number = req.body.number || req.body.telefono || '';
+    if (!empresaId) return res.status(400).json({ ok: false, error: 'Falta empresa_id.' });
+
+    const created = await createEvolutionInstance({ empresaId, number });
+    await setEvolutionWebhook(created.instanceName).catch((err) => console.warn('[EVOLUTION_WEBHOOK_SET_WARN]', err.message));
+    const connected = await connectEvolutionInstance(created.instanceName, number);
+    const qr = extractQrFromEvolution(connected);
+    const integration = await upsertEvolutionIntegration({ empresaId, instanceName: created.instanceName, qrData: qr, estado: 'qr_pendiente' });
+
+    res.json({ ok: true, provider: 'evolution', instanceName: created.instanceName, alreadyExisted: created.alreadyExisted, qr, integration_id: integration.id });
+  } catch (error) {
+    console.error('[api/evolution/client/start]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/evolution/client/status/:empresaId', async (req, res) => {
+  try {
+    const instanceName = safeInstanceName(req.params.empresaId);
+    const state = await getEvolutionState(instanceName);
+    const rawState = state?.instance?.state || state?.state || '';
+    const estado = String(rawState).toLowerCase() === 'open' ? 'conectado' : (rawState || 'pendiente');
+    const { data: integration } = await supabase
+      .from('whatsapp_integraciones')
+      .update({ estado, conectado_en: estado === 'conectado' ? new Date().toISOString() : undefined, updated_at: new Date().toISOString() })
+      .or(`instance_name.eq.${instanceName},phone_number_id.eq.${instanceName}`)
+      .select('*')
+      .maybeSingle();
+    if (integration?.empresa_id) {
+      await supabase.from('empresas').update({ estado_whatsapp: estado, onboarding_estado: estado === 'conectado' ? 'whatsapp_qr_conectado' : 'qr_pendiente', updated_at: new Date().toISOString() }).eq('id', integration.empresa_id);
+    }
+    res.json({ ok: true, provider: 'evolution', instanceName, state, estado });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/evolution/client/logout', async (req, res) => {
+  try {
+    const empresaId = req.body.empresa_id || req.body.empresaId;
+    if (!empresaId) return res.status(400).json({ ok: false, error: 'Falta empresa_id.' });
+    const instanceName = safeInstanceName(empresaId);
+    const result = await logoutEvolutionInstance(instanceName);
+    await supabase.from('whatsapp_integraciones').update({ estado: 'desconectado', desconectado_en: new Date().toISOString(), updated_at: new Date().toISOString() }).or(`instance_name.eq.${instanceName},phone_number_id.eq.${instanceName}`);
+    await supabase.from('empresas').update({ estado_whatsapp: 'desconectado', onboarding_estado: 'qr_desconectado', updated_at: new Date().toISOString() }).eq('id', empresaId);
+    res.json({ ok: true, result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 // ==============================
 // V15: Embedded Signup / SaaS multiempresa
 // ==============================
@@ -140,7 +248,7 @@ app.get('/api/meta/config', requireDashboardKey, (_req, res) => {
 app.get('/meta/callback', (req, res) => {
   const code = req.query.code || '';
   const state = req.query.state || '';
-  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>GO USA Meta Callback</title></head><body style="font-family:Arial;padding:24px"><h2>Meta devolvió autorización</h2><p>Copia el code en el panel si no se cerró automático.</p><textarea style="width:100%;height:130px">${String(code).replace(/</g,'&lt;')}</textarea><p>state: ${String(state).replace(/</g,'&lt;')}</p></body></html>`);
+  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>la empresa Meta Callback</title></head><body style="font-family:Arial;padding:24px"><h2>Meta devolvió autorización</h2><p>Copia el code en el panel si no se cerró automático.</p><textarea style="width:100%;height:130px">${String(code).replace(/</g,'&lt;')}</textarea><p>state: ${String(state).replace(/</g,'&lt;')}</p></body></html>`);
 });
 
 // Recibe el resultado de Embedded Signup o conexión manual del cliente.
@@ -237,6 +345,6 @@ app.get('/api/bootstrap', requireDashboardKey, async (req, res) => {
 app.use((_req, res) => res.status(404).json({ ok: false, error: 'Ruta no encontrada.' }));
 
 app.listen(config.port, () => {
-  console.log(`GO USA Webhook Backend activo en puerto ${config.port}`);
+  console.log(`la empresa Webhook Backend activo en puerto ${config.port}`);
   console.log(`Webhook Meta: ${config.publicBaseUrl || 'https://TU-BACKEND'}/webhook`);
 });

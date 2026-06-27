@@ -8,6 +8,8 @@ function requireEnv(name, { optional = false } = {}) {
   return value || '';
 }
 
+const whatsappProvider = (process.env.WHATSAPP_PROVIDER || 'meta').toLowerCase();
+
 const config = {
   port: Number(process.env.PORT || 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -18,14 +20,19 @@ const config = {
   supabaseServiceRoleKey: requireEnv('SUPABASE_SERVICE_ROLE_KEY'),
   defaultEmpresaId: process.env.DEFAULT_EMPRESA_ID || '',
 
-  metaVerifyToken: requireEnv('META_VERIFY_TOKEN'),
-  metaAccessToken: requireEnv('META_ACCESS_TOKEN'),
+  whatsappProvider,
+  metaVerifyToken: process.env.META_VERIFY_TOKEN || '',
+  metaAccessToken: process.env.META_ACCESS_TOKEN || '',
   metaApiVersion: process.env.META_API_VERSION || 'v23.0',
   metaAppId: process.env.META_APP_ID || '',
   metaAppSecret: process.env.META_APP_SECRET || '',
   metaConfigId: process.env.META_CONFIG_ID || '',
   metaRedirectUri: process.env.META_REDIRECT_URI || '',
   phoneNumberId: process.env.PHONE_NUMBER_ID || '',
+
+  evolutionApiUrl: (process.env.EVOLUTION_API_URL || '').replace(/\/$/, ''),
+  evolutionApiKey: process.env.EVOLUTION_API_KEY || '',
+  evolutionDefaultCountryCode: process.env.EVOLUTION_DEFAULT_COUNTRY_CODE || '591',
 
   aiProvider: (process.env.AI_PROVIDER || 'mock').toLowerCase(),
   geminiApiKey: process.env.GEMINI_API_KEY || '',

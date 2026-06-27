@@ -1,5 +1,6 @@
 const {
   getEmpresaByPhoneNumberId,
+  getEmpresaByEvolutionInstance,
   getIaConfig,
   getKnowledge,
   upsertLead,
@@ -10,6 +11,8 @@ const {
   saveMessageStatus
 } = require('./db');
 const { extractIncomingEvents, sendWhatsAppText, markMessageRead } = require('./whatsapp');
+const { extractEvolutionMessages, sendEvolutionText, normalizeEvolutionEvent } = require('./evolution');
+const { supabase } = require('./supabaseClient');
 const { generateAiReply } = require('./ai');
 
 async function processWebhookPayload(payload) {
@@ -114,6 +117,131 @@ async function processIncomingEvent(event, fullPayload = {}) {
   }
 }
 
+
+async function processEvolutionWebhookPayload(payload) {
+  const normalized = normalizeEvolutionEvent(payload);
+  const results = [];
+
+  if (String(normalized.event || '').toUpperCase().includes('CONNECTION')) {
+    await updateEvolutionConnectionStatus(normalized.instanceName, payload).catch(() => null);
+  }
+
+  const events = extractEvolutionMessages(payload);
+  if (!events.length) {
+    await saveWebhookLog({ evento: 'evolution_webhook_empty_or_status', payload, estado: 'ok' }).catch(() => null);
+    return { ok: true, processed: 0, results };
+  }
+
+  for (const event of events) {
+    const result = await processEvolutionIncomingEvent(event, payload);
+    results.push(result);
+  }
+  return { ok: true, processed: results.length, results };
+}
+
+async function updateEvolutionConnectionStatus(instanceName, payload = {}) {
+  if (!instanceName) return null;
+  const state = payload.data?.state || payload.state || payload.data?.connection || payload.connection || '';
+  const isOpen = String(state).toLowerCase() === 'open';
+  const estado = isOpen ? 'conectado' : (state ? String(state).toLowerCase() : 'pendiente');
+  const { data } = await supabase
+    .from('whatsapp_integraciones')
+    .update({
+      estado,
+      conectado_en: isOpen ? new Date().toISOString() : undefined,
+      desconectado_en: !isOpen && state ? new Date().toISOString() : undefined,
+      metadata: { last_connection_update: payload },
+      updated_at: new Date().toISOString()
+    })
+    .or(`instance_name.eq.${instanceName},phone_number_id.eq.${instanceName}`)
+    .select('*')
+    .maybeSingle();
+  if (data?.empresa_id) {
+    await supabase.from('empresas').update({
+      estado_whatsapp: estado,
+      onboarding_estado: isOpen ? 'whatsapp_qr_conectado' : 'qr_pendiente',
+      updated_at: new Date().toISOString()
+    }).eq('id', data.empresa_id);
+  }
+  return data;
+}
+
+async function processEvolutionIncomingEvent(event, fullPayload = {}) {
+  let empresa = null;
+  let lead = null;
+  let integration = null;
+  try {
+    const resolved = await getEmpresaByEvolutionInstance(event.instanceName);
+    empresa = resolved.empresa;
+    integration = resolved.integration;
+    lead = await upsertLead({
+      empresaId: empresa.id,
+      telefono: event.from,
+      waId: event.from,
+      nombreWhatsapp: event.contactName,
+      incomingText: event.text
+    });
+
+    await saveConversation({
+      empresaId: empresa.id,
+      leadId: lead.id,
+      telefono: event.from,
+      rol: 'cliente',
+      mensaje: event.text,
+      tipo: event.type,
+      waMessageId: event.waMessageId,
+      metadata: { evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName }
+    });
+
+    if (lead.bloqueado) {
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_message_blocked_lead', payload: event, estado: 'ok' });
+      return { ok: true, skipped: true, reason: 'lead_bloqueado', telefono: event.from };
+    }
+
+    const [iaConfig, knowledge, history] = await Promise.all([
+      getIaConfig(empresa.id),
+      getKnowledge(empresa.id),
+      getConversationHistory(lead.id, event.from, 18)
+    ]);
+
+    const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
+    const updatedLead = await updateLeadFromAi(lead.id, ai);
+
+    const iaConversation = await saveConversation({
+      empresaId: empresa.id,
+      leadId: lead.id,
+      telefono: event.from,
+      rol: ai.requiere_asesor ? 'sistema' : 'ia',
+      mensaje: ai.respuesta,
+      tipo: 'text',
+      metadata: { ai, provider: 'evolution', instanceName: event.instanceName, requires_human: ai.requiere_asesor }
+    });
+
+    const evoResponse = await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: ai.respuesta });
+
+    await saveWebhookLog({
+      empresaId: empresa.id,
+      leadId: lead.id,
+      evento: 'evolution_message_processed',
+      payload: { event, ai, evoResponse, updatedLeadId: updatedLead?.id, iaConversationId: iaConversation?.id },
+      estado: 'ok'
+    });
+
+    return { ok: true, provider: 'evolution', telefono: event.from, lead_id: lead.id, respuesta: ai.respuesta, evolution: evoResponse };
+  } catch (error) {
+    console.error('[processEvolutionIncomingEvent]', error);
+    await saveWebhookLog({
+      empresaId: empresa?.id || null,
+      leadId: lead?.id || null,
+      evento: 'evolution_message_error',
+      payload: { event, fullPayload },
+      estado: 'error',
+      error: error.message
+    }).catch(() => null);
+    return { ok: false, provider: 'evolution', telefono: event.from, error: error.message };
+  }
+}
+
 async function simulateIncomingMessage({ phoneNumberId, from, name, text }) {
   const fakePayload = {
     object: 'whatsapp_business_account',
@@ -126,11 +254,11 @@ async function simulateIncomingMessage({ phoneNumberId, from, name, text }) {
             value: {
               messaging_product: 'whatsapp',
               metadata: { display_phone_number: '', phone_number_id: phoneNumberId },
-              contacts: [{ profile: { name: name || 'Cliente Demo' }, wa_id: from }],
+              contacts: [{ profile: { name: name || 'Cliente' }, wa_id: from }],
               messages: [
                 {
                   from,
-                  id: `wamid.demo.${Date.now()}`,
+                  id: `wamid.manual.${Date.now()}`,
                   timestamp: String(Math.floor(Date.now() / 1000)),
                   text: { body: text },
                   type: 'text'
@@ -145,4 +273,4 @@ async function simulateIncomingMessage({ phoneNumberId, from, name, text }) {
   return processWebhookPayload(fakePayload);
 }
 
-module.exports = { processWebhookPayload, processIncomingEvent, simulateIncomingMessage };
+module.exports = { processWebhookPayload, processIncomingEvent, simulateIncomingMessage, processEvolutionWebhookPayload, processEvolutionIncomingEvent };
