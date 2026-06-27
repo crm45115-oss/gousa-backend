@@ -9,6 +9,8 @@ const {
   updateLeadFromAi,
   saveWebhookLog,
   saveMessageStatus,
+  findConversationHeader,
+  isRecentAiEcho,
   setConversationIaPaused,
   isConversationPaused
 } = require('./db');
@@ -186,19 +188,10 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
       incomingText: event.text
     });
 
-    // 1) Guardar siempre el mensaje real en historial.
-    await saveConversation({
-      empresaId: empresa.id,
-      leadId: lead.id,
-      telefono: event.from,
-      rol: event.fromMe ? 'asesor' : 'cliente',
-      mensaje: event.text,
-      tipo: event.type,
-      waMessageId: event.waMessageId,
-      metadata: { provider: 'evolution', evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName, from_me: event.fromMe }
-    });
-
-    // 2) Si el negocio respondió desde el celular, pausar IA para esa clienta.
+    // 1) Si Evolution devuelve un mensaje saliente, puede ser:
+    //    A) eco de la misma IA que acabamos de enviar por API, o
+    //    B) mensaje manual escrito por el dueño desde el celular.
+    //    Antes el backend pausaba ambos. Ahora solo pausa el caso B.
     if (event.fromMe) {
       const cmd = String(event.text || '').trim().toLowerCase();
       if (cmd === '/ia on' || cmd === 'ia on') {
@@ -212,10 +205,39 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
         return { ok: true, skipped: true, reason: 'ia_pausada_comando', telefono: event.from };
       }
 
-      await setConversationIaPaused({ empresaId: empresa.id, telefono: event.from, paused: true, motivo: 'asesor_respondio_desde_celular' });
+      const aiEcho = await isRecentAiEcho({ empresaId: empresa.id, telefono: event.from, mensaje: event.text, seconds: 360 });
+      if (aiEcho) {
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_from_me_ai_echo_ignored', payload: event, estado: 'ok' });
+        return { ok: true, skipped: true, reason: 'from_me_ai_echo_ignored', telefono: event.from };
+      }
+
+      await saveConversation({
+        empresaId: empresa.id,
+        leadId: lead.id,
+        telefono: event.from,
+        rol: 'asesor',
+        mensaje: event.text,
+        tipo: event.type,
+        waMessageId: event.waMessageId,
+        metadata: { provider: 'evolution', evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName, from_me: true, human_manual: true }
+      });
+
+      await setConversationIaPaused({ empresaId: empresa.id, telefono: event.from, paused: true, motivo: 'humano_respondio_desde_celular' });
       await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_ia_paused_by_human_reply', payload: event, estado: 'ok' });
       return { ok: true, skipped: true, reason: 'from_me_human_takeover', telefono: event.from };
     }
+
+    // 2) Mensaje entrante real del cliente: guardarlo en historial.
+    await saveConversation({
+      empresaId: empresa.id,
+      leadId: lead.id,
+      telefono: event.from,
+      rol: 'cliente',
+      mensaje: event.text,
+      tipo: event.type,
+      waMessageId: event.waMessageId,
+      metadata: { provider: 'evolution', evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName, from_me: false }
+    });
 
     if (lead.bloqueado) {
       await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_message_blocked_lead', payload: event, estado: 'ok' });
@@ -223,7 +245,20 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     }
 
     // 3) Si una persona tomó control, guardar mensaje pero NO responder con IA.
-    const paused = await isConversationPaused({ empresaId: empresa.id, telefono: event.from });
+    //    Para arreglar conversaciones pausadas por el bug anterior, se auto-reactivan
+    //    pausas antiguas con motivo viejo/null. Las pausas nuevas reales usan motivo
+    //    humano_respondio_desde_celular o comando_ia_off y sí se respetan.
+    let paused = await isConversationPaused({ empresaId: empresa.id, telefono: event.from });
+    if (paused) {
+      const conv = await findConversationHeader({ empresaId: empresa.id, telefono: event.from });
+      const motivo = String(conv?.pausa_motivo || '').toLowerCase();
+      const esPausaReal = motivo === 'humano_respondio_desde_celular' || motivo === 'comando_ia_off';
+      if (!esPausaReal) {
+        await setConversationIaPaused({ empresaId: empresa.id, telefono: event.from, paused: false });
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_auto_reactivate_old_false_pause', payload: { event, motivo }, estado: 'ok' });
+        paused = false;
+      }
+    }
     if (paused) {
       await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_message_saved_ia_paused', payload: event, estado: 'ok' });
       return { ok: true, skipped: true, reason: 'ia_pausada', telefono: event.from };

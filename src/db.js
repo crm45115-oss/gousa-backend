@@ -255,6 +255,48 @@ async function saveConversation({ empresaId, leadId, telefono, rol, mensaje, tip
   return { ...conversation, message_id: messageRow?.id || null };
 }
 
+function normalizeMsgForCompare(text = '') {
+  return String(text || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+async function isRecentAiEcho({ empresaId, telefono, mensaje, seconds = 300 }) {
+  const phone = onlyDigits(telefono);
+  const target = normalizeMsgForCompare(mensaje);
+  if (!empresaId || !phone || !target) return false;
+
+  const since = new Date(Date.now() - Number(seconds || 300) * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('conversacion_mensajes')
+    .select('id,mensaje,payload,created_at,from_me,direccion')
+    .eq('empresa_id', empresaId)
+    .eq('telefono', phone)
+    .eq('from_me', true)
+    .eq('direccion', 'saliente')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(12);
+
+  if (error) {
+    console.error('[isRecentAiEcho]', error.message);
+    return false;
+  }
+
+  for (const row of data || []) {
+    const rowText = normalizeMsgForCompare(row.mensaje);
+    if (!rowText || rowText !== target) continue;
+    const payload = row.payload || {};
+    const rol = payload.rol || payload?.metadata?.rol || '';
+    const metadata = payload.metadata || {};
+    const hasAiMarker = rol === 'ia' || rol === 'sistema' || Boolean(metadata.ai) || metadata?.requires_human !== undefined;
+    if (hasAiMarker) return true;
+  }
+  return false;
+}
+
 async function setConversationIaPaused({ empresaId, telefono, paused = true, motivo = 'asesor_manual', pausaHasta = null }) {
   const phone = onlyDigits(telefono);
   const existing = await findConversationHeader({ empresaId, telefono: phone });
@@ -358,6 +400,7 @@ module.exports = {
   saveWebhookLog,
   saveMessageStatus,
   findConversationHeader,
+  isRecentAiEcho,
   setConversationIaPaused,
   isConversationPaused
 };
