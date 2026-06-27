@@ -1,5 +1,5 @@
 const { config } = require('./env');
-const { onlyDigits } = require('./utils');
+const { onlyDigits, extractJsonObject } = require('./utils');
 
 function requireEvolutionConfig() {
   if (!config.evolutionApiUrl) throw new Error('Falta EVOLUTION_API_URL en Railway.');
@@ -10,6 +10,23 @@ function safeInstanceName(empresaId) {
   const clean = String(empresaId || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 18);
   if (!clean) throw new Error('Falta empresa_id para crear instancia QR.');
   return `cf360_${clean}`.toLowerCase();
+}
+
+
+function cleanOutgoingText(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'object') {
+    if (value.respuesta !== undefined) return cleanOutgoingText(value.respuesta);
+    if (value.text !== undefined) return cleanOutgoingText(value.text);
+    return '';
+  }
+  let raw = String(value || '').trim();
+  const parsed = extractJsonObject(raw);
+  if (parsed && typeof parsed === 'object' && parsed.respuesta !== undefined) {
+    return cleanOutgoingText(parsed.respuesta);
+  }
+  raw = raw.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+  return raw;
 }
 
 function evolutionHeaders() {
@@ -112,7 +129,7 @@ async function sendEvolutionText({ instanceName, to, text }) {
     method: 'POST',
     body: {
       number,
-      text: String(text || '').slice(0, 4096),
+      text: cleanOutgoingText(text).slice(0, 4096),
       delay: 800,
       linkPreview: false
     }

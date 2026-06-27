@@ -15,7 +15,7 @@ const {
 const { extractIncomingEvents, sendWhatsAppText, markMessageRead } = require('./whatsapp');
 const { extractEvolutionMessages, sendEvolutionText, normalizeEvolutionEvent } = require('./evolution');
 const { supabase } = require('./supabaseClient');
-const { generateAiReply } = require('./ai');
+const { generateAiReply, cleanWhatsappAnswer } = require('./ai');
 
 async function processWebhookPayload(payload) {
   const events = extractIncomingEvents(payload);
@@ -78,6 +78,7 @@ async function processIncomingEvent(event, fullPayload = {}) {
     ]);
 
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
+    ai.respuesta = cleanWhatsappAnswer(ai.respuesta);
     const updatedLead = await updateLeadFromAi(lead.id, ai);
 
     const iaConversation = await saveConversation({
@@ -235,6 +236,7 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     ]);
 
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
+    ai.respuesta = cleanWhatsappAnswer(ai.respuesta);
     const updatedLead = await updateLeadFromAi(lead.id, ai);
 
     const iaConversation = await saveConversation({

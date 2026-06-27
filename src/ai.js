@@ -27,6 +27,10 @@ function buildPrompt({ empresa, iaConfig, knowledge, lead, history, incomingText
     .map((m) => `${m.rol}: ${m.mensaje}`)
     .join('\n');
 
+  if (rubro.includes('negocio_digital') || rubro.includes('servicios_digitales') || rubro.includes('digital') || rubro.includes('wordpress') || rubro.includes('hosting') || rubro.includes('chatflow')) {
+    return buildPromptNegocioDigital({ empresa, iaConfig, servicios, fuentes, faqs, lead, historial, incomingText });
+  }
+
   if (rubro.includes('venta_live_fardo') || rubro.includes('live') || rubro.includes('fardo') || rubro.includes('ropa') || rubro.includes('tienda')) {
     return buildPromptRopa({ empresa, iaConfig, servicios, fuentes, faqs, lead, historial, incomingText });
   }
@@ -58,6 +62,88 @@ function jsonContract() {
     "requiere_asesor": false
   }
 }`;
+}
+
+
+function buildPromptNegocioDigital({ empresa, iaConfig, servicios, fuentes, faqs, lead, historial, incomingText }) {
+  return `
+Eres ${iaConfig.nombre_asistente || 'Asistente Digital de Fernando'}, asistente de WhatsApp de ${empresa.nombre || 'Fernando Digital'}.
+
+RUBRO REAL DE LA EMPRESA:
+Negocio digital de Fernando: páginas web, WordPress, hosting, dominio, correos corporativos, IA para WhatsApp, WhatsApp API, QR asistido, dashboards y SaaS ChatFlow 360.
+
+OBJETIVO:
+Atender prospectos interesados en servicios digitales, entender qué necesita su negocio, explicar opciones, mostrar planes referenciales y agendar una llamada o reunión con Fernando.
+
+PROHIBIDO:
+- No respondas como tienda de ropa.
+- No respondas como agencia de viajes.
+- No respondas como clínica dental.
+- No inventes precios finales sin revisar el proyecto.
+- No prometas funciones avanzadas sin decir que Fernando debe revisarlo.
+- No hables largo; WhatsApp debe sentirse breve y natural.
+
+TONO:
+${iaConfig.tono || 'Amable, profesional, cercano, comercial, claro y moderno.'}
+
+SERVICIOS QUE OFRECE FERNANDO:
+${iaConfig.reglas || ''}
+- Páginas web para negocios: presencia digital, servicios, productos, ubicación, WhatsApp, redes, formularios y diseño adaptable a celular.
+- WordPress: creación o rediseño de sitios administrables.
+- Hosting, dominio y correos corporativos.
+- IA para WhatsApp: respuestas automáticas, toma de datos, preguntas frecuentes y derivación a humano.
+- WhatsApp API / QR asistido: conexión para pilotos o conexión oficial según el caso.
+- ChatFlow 360: SaaS con dashboard, clientes, conversaciones, IA, pagos, vencimientos, plantillas por rubro y automatización WhatsApp.
+
+PLANES REFERENCIALES:
+- IA WhatsApp Básico: desde 200 Bs mensuales para negocios pequeños que quieren responder consultas básicas y tomar datos.
+- Página Web Básica: web informativa con WhatsApp, ubicación, redes y secciones básicas.
+- Página Web Profesional: servicios, galería, formularios, testimonios, contacto y estructura profesional.
+- WordPress: instalación, diseño y configuración editable.
+- ChatFlow 360: mensualidad según tipo de negocio y funciones.
+
+REGLAS DE ATENCIÓN:
+- Haz una pregunta por mensaje.
+- Primero identifica qué tipo de negocio tiene el cliente.
+- Luego identifica qué necesita: página web, WordPress, hosting/correos, IA WhatsApp, WhatsApp API o ChatFlow 360.
+- Si pregunta por precio, usa precios referenciales y aclara que Fernando confirma según el alcance.
+- Si pregunta por ejemplos, responde que Fernando puede mostrar páginas, dashboards y sistemas ya creados según el tipo de proyecto.
+- Si quiere avanzar, pide nombre, negocio, ciudad, servicio que necesita, WhatsApp y horario para llamada.
+- Si pide una cita, agenda conversacionalmente: “¿Qué día y hora te queda bien para que Fernando te explique?”
+- Si no sabes algo técnico, di que Fernando lo revisará y le dará una propuesta clara.
+
+MENSAJE DE BIENVENIDA BASE:
+${iaConfig.mensaje_bienvenida || '¡Hola! Soy el asistente digital de Fernando 😊 Ayudamos a negocios con páginas web, WordPress, hosting, correos corporativos, IA para WhatsApp y sistemas como ChatFlow 360. ¿Qué necesitas mejorar en tu negocio: tu página web, tu WhatsApp, tus clientes o tu sistema de atención?'}
+
+RESPUESTA DE PRECIO BASE:
+${iaConfig.respuesta_precio || 'Depende de lo que necesites 😊 Para IA básica en WhatsApp tenemos planes desde 200 Bs mensuales. Para páginas web o WordPress, el precio depende de si quieres una página simple, profesional, catálogo, dominio, hosting o correos.'}
+
+DATOS DE EMPRESA:
+- Empresa: ${empresa.nombre || ''}
+- Rubro: ${empresa.rubro || ''}
+- WhatsApp: ${empresa.whatsapp || ''}
+- Web: ${empresa.web || ''}
+- Zona horaria: ${empresa.timezone || 'America/La_Paz'}
+
+SERVICIOS / DATOS CARGADOS:
+- ${servicios || 'Páginas web, WordPress, hosting, dominio, correos corporativos, IA WhatsApp, WhatsApp API, QR asistido, dashboards y ChatFlow 360.'}
+
+FUENTES / BASE IA:
+- ${fuentes || 'Datos cargados en el dashboard.'}
+
+FAQ:
+${faqs || 'Sin FAQ cargado.'}
+
+DATOS ACTUALES DEL LEAD:
+${JSON.stringify(lead || {}, null, 2)}
+
+HISTORIAL RECIENTE:
+${historial || 'Sin historial previo.'}
+
+MENSAJE NUEVO DEL CLIENTE:
+${incomingText}
+
+${jsonContract()}`.trim();
 }
 
 function buildPromptRopa({ empresa, iaConfig, servicios, fuentes, faqs, lead, historial, incomingText }) {
@@ -261,18 +347,49 @@ async function callOpenAiCompatible(prompt, { apiKey, baseUrl, model }) {
   return normalizeAiResponse(text);
 }
 
+function cleanWhatsappAnswer(value) {
+  if (value === undefined || value === null) return '';
+
+  if (typeof value === 'object') {
+    if (value.respuesta !== undefined) return cleanWhatsappAnswer(value.respuesta);
+    if (value.message !== undefined) return cleanWhatsappAnswer(value.message);
+    if (value.text !== undefined) return cleanWhatsappAnswer(value.text);
+    return '';
+  }
+
+  let raw = String(value || '').trim();
+
+  // Si por algún motivo llega el JSON completo como texto, extraer solo respuesta.
+  const parsed = extractJsonObject(raw);
+  if (parsed && typeof parsed === 'object' && parsed.respuesta !== undefined) {
+    return cleanWhatsappAnswer(parsed.respuesta);
+  }
+
+  // Quitar fences de markdown si el modelo los devuelve.
+  raw = raw
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim();
+
+  // Limpieza de seguridad por si queda algo como: respuesta: "..."
+  const match = raw.match(/^\s*[\{]?\s*["']?respuesta["']?\s*[:=]\s*["']([\s\S]*?)["']\s*[\}]?\s*$/i);
+  if (match) return match[1].trim();
+
+  return raw;
+}
+
 function normalizeAiResponse(text) {
   const parsed = extractJsonObject(text);
   if (!parsed) {
     return {
-      respuesta: limitText(text || 'Gracias por escribir. Un asesor de la empresa te responderá en breve.', 1200),
+      respuesta: limitText(cleanWhatsappAnswer(text) || 'Gracias por escribir. Un asesor de la empresa te responderá en breve.', 1200),
       requiere_asesor: true,
       motivo_derivacion: 'La IA no devolvió JSON válido.',
       lead_updates: { requiere_asesor: true, estado: 'derivado_asesor' }
     };
   }
   return {
-    respuesta: limitText(parsed.respuesta || 'Gracias por escribir. ¿Me indica su nombre?', 1200),
+    respuesta: limitText(cleanWhatsappAnswer(parsed.respuesta) || 'Gracias por escribir. ¿Me indica su nombre?', 1200),
     requiere_asesor: Boolean(parsed.requiere_asesor || parsed.derivar),
     motivo_derivacion: parsed.motivo_derivacion || '',
     lead_updates: parsed.lead_updates || parsed.lead || {}
@@ -283,6 +400,17 @@ function mockReply({ incomingText, lead, empresa }) {
   const rubro = normalizeRubro(empresa?.rubro || '');
   const text = String(incomingText || '').toLowerCase();
   const requires = ['asesor', 'humano', 'precio', 'costo', 'pago', 'qr', 'comprobante', 'reclamo'].some((x) => text.includes(x));
+
+  if (rubro.includes('negocio_digital') || rubro.includes('servicios_digitales') || rubro.includes('digital') || rubro.includes('wordpress') || rubro.includes('hosting') || rubro.includes('chatflow')) {
+    let respuesta = '¡Hola! Soy el asistente digital de Fernando 😊 Ayudamos a negocios con páginas web, WordPress, hosting, correos corporativos, IA para WhatsApp y sistemas como ChatFlow 360. ¿Qué necesitas mejorar en tu negocio?';
+    if (text.includes('precio') || text.includes('cuanto') || text.includes('cuánto') || text.includes('costo')) respuesta = 'Depende de lo que necesites 😊 Para IA básica en WhatsApp tenemos planes desde 200 Bs mensuales. Para páginas web o WordPress, el precio depende del alcance. ¿Qué tipo de proyecto necesitas?';
+    if (text.includes('wordpress')) respuesta = 'Claro 😊 Podemos crear o rediseñar tu página en WordPress. ¿Ya tienes dominio y hosting o empezaríamos desde cero?';
+    if (text.includes('hosting') || text.includes('dominio') || text.includes('correo')) respuesta = 'Sí 😊 Podemos ayudarte con dominio, hosting y correos corporativos. ¿Cuántos correos necesitas y ya tienes dominio comprado?';
+    if (text.includes('ia') || text.includes('whatsapp') || text.includes('wasap') || text.includes('api')) respuesta = 'Sí 😊 Podemos ayudarte a poner una IA en tu WhatsApp para responder consultas, tomar datos y pasar a humano cuando sea necesario. ¿Qué tipo de negocio tienes?';
+    if (text.includes('cita') || text.includes('reun')) respuesta = 'Perfecto 😊 ¿Qué día y hora te queda bien para que Fernando te explique y te dé una propuesta clara?';
+    return { respuesta, requiere_asesor: requires, motivo_derivacion: requires ? 'Prospecto solicita precio/pago/humano o revisión comercial.' : '', lead_updates: { estado: 'en_proceso', etapa: 'interesado', servicio_solicitado: 'servicios_digitales' } };
+  }
+
   if (rubro.includes('fardo') || rubro.includes('ropa') || rubro.includes('tienda') || rubro.includes('live')) {
     let respuesta = '¡Hola! Soy el asistente de American Style 😊 ¿Vienes del live o buscas alguna prenda en especial? Puedes enviarme captura de la prenda que te gustó.';
     if (text.includes('ropa') || text.includes('prenda') || text.includes('live')) respuesta = 'Perfecto 😊 ¿Puedes enviarme una captura de la prenda que te gustó para verificar disponibilidad?';
@@ -306,4 +434,4 @@ function mockReply({ incomingText, lead, empresa }) {
   };
 }
 
-module.exports = { generateAiReply, buildPrompt };
+module.exports = { generateAiReply, buildPrompt, cleanWhatsappAnswer };
