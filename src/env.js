@@ -50,6 +50,17 @@ const config = {
   openrouterModel: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct:free',
   openrouterBaseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
 
+  // V16.28 - Cola Redis + Worker.
+  // REDIS_URL vacío = modo seguro: procesa como antes, sin cola.
+  redisUrl: process.env.REDIS_URL || '',
+  queueEnabled: String(process.env.QUEUE_ENABLED || 'true').toLowerCase() !== 'false',
+  queueName: process.env.QUEUE_NAME || 'chatflow360_messages',
+  queueConcurrency: Math.max(1, Number(process.env.QUEUE_CONCURRENCY || 1)),
+  queueRemoveOnComplete: Math.max(100, Number(process.env.QUEUE_REMOVE_ON_COMPLETE || 1000)),
+  queueRemoveOnFail: Math.max(100, Number(process.env.QUEUE_REMOVE_ON_FAIL || 5000)),
+  messageRetryLimit: Math.max(1, Number(process.env.MESSAGE_RETRY_LIMIT || 3)),
+  messageRetryDelayMs: Math.max(1000, Number(process.env.MESSAGE_RETRY_DELAY_MS || 5000)),
+
   dashboardApiKey: process.env.DASHBOARD_API_KEY || ''
 };
 

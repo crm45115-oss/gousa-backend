@@ -8,6 +8,7 @@ const { exchangeCodeForToken, upsertIntegration, getIntegrationStatus } = requir
 const { safeInstanceName, createEvolutionInstance, setEvolutionWebhook, connectEvolutionInstance, getEvolutionState, logoutEvolutionInstance, extractQrFromEvolution, sendEvolutionText } = require('./src/evolution');
 const { getEmpresaByPhoneNumberId, saveConversation, upsertLead, saveWebhookLog } = require('./src/db');
 const { onlyDigits } = require('./src/utils');
+const { enqueueWebhookJob, startQueueWorker, getQueueStatus, queueAvailable } = require('./src/messageQueue');
 
 const app = express();
 
@@ -46,7 +47,9 @@ app.get('/health', async (_req, res) => {
     meta_api_version: config.metaApiVersion,
     embedded_signup: Boolean(config.metaAppId && config.metaConfigId),
     whatsapp_provider: config.whatsappProvider,
-    evolution_ready: Boolean(config.evolutionApiUrl && config.evolutionApiKey)
+    evolution_ready: Boolean(config.evolutionApiUrl && config.evolutionApiKey),
+    queue_enabled: queueAvailable(),
+    queue_name: config.queueName
   });
 });
 
@@ -72,8 +75,19 @@ app.post('/webhook', async (req, res) => {
     // Responder rápido a Meta. El proceso se hace inmediatamente, pero no bloquea a Meta más de lo necesario.
     res.status(200).json({ ok: true, received: true });
 
-    const result = await processWebhookPayload(req.body);
-    console.log('[WEBHOOK_PROCESSED]', JSON.stringify(result));
+    if (queueAvailable()) {
+      try {
+        const queued = await enqueueWebhookJob({ provider: 'meta', payload: req.body });
+        console.log('[WEBHOOK_QUEUED]', JSON.stringify(queued));
+      } catch (queueError) {
+        console.error('[WEBHOOK_QUEUE_FALLBACK_INLINE]', queueError.message);
+        const result = await processWebhookPayload(req.body);
+        console.log('[WEBHOOK_PROCESSED_INLINE_AFTER_QUEUE_FAIL]', JSON.stringify(result));
+      }
+    } else {
+      const result = await processWebhookPayload(req.body);
+      console.log('[WEBHOOK_PROCESSED_INLINE]', JSON.stringify(result));
+    }
   } catch (error) {
     console.error('[WEBHOOK_ERROR]', error);
     if (!res.headersSent) res.status(500).json({ ok: false, error: error.message });
@@ -85,8 +99,19 @@ app.post('/webhook', async (req, res) => {
 app.post('/webhook/evolution', async (req, res) => {
   try {
     res.status(200).json({ ok: true, received: true });
-    const result = await processEvolutionWebhookPayload(req.body);
-    console.log('[EVOLUTION_WEBHOOK_PROCESSED]', JSON.stringify(result));
+    if (queueAvailable()) {
+      try {
+        const queued = await enqueueWebhookJob({ provider: 'evolution', payload: req.body });
+        console.log('[EVOLUTION_WEBHOOK_QUEUED]', JSON.stringify(queued));
+      } catch (queueError) {
+        console.error('[EVOLUTION_WEBHOOK_QUEUE_FALLBACK_INLINE]', queueError.message);
+        const result = await processEvolutionWebhookPayload(req.body);
+        console.log('[EVOLUTION_WEBHOOK_PROCESSED_INLINE_AFTER_QUEUE_FAIL]', JSON.stringify(result));
+      }
+    } else {
+      const result = await processEvolutionWebhookPayload(req.body);
+      console.log('[EVOLUTION_WEBHOOK_PROCESSED_INLINE]', JSON.stringify(result));
+    }
   } catch (error) {
     console.error('[EVOLUTION_WEBHOOK_ERROR]', error);
     if (!res.headersSent) res.status(500).json({ ok: false, error: error.message });
@@ -408,9 +433,23 @@ app.get('/api/bootstrap', requireDashboardKey, async (req, res) => {
   }
 });
 
+
+// V16.28: estado de cola Redis/BullMQ para verificar escalabilidad sin tocar Supabase.
+app.get('/api/queue/status', requireDashboardKey, async (_req, res) => {
+  try {
+    const status = await getQueueStatus();
+    res.json({ ok: true, ...status });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.use((_req, res) => res.status(404).json({ ok: false, error: 'Ruta no encontrada.' }));
 
+startQueueWorker();
+
 app.listen(config.port, () => {
-  console.log(`ChatFlow360 Backend V16.26 REAL_WHATSAPP_CONTEXT activo en puerto ${config.port}`);
+  console.log(`ChatFlow360 Backend V16.28 REDIS_QUEUE_WORKER_SAFE activo en puerto ${config.port}`);
   console.log(`Webhook Meta: ${config.publicBaseUrl || 'https://TU-BACKEND'}/webhook`);
+  console.log(`Queue: ${queueAvailable() ? 'redis_activa' : 'inline_sin_redis'} (${config.queueName})`);
 });
