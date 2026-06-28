@@ -215,6 +215,31 @@ async function updateEvolutionConnectionStatus(instanceName, payload = {}) {
   return data;
 }
 
+
+async function getQrPagoSeguro(empresaId, iaConfig = {}) {
+  let qr = iaConfig?.qr_pago_url || iaConfig?.qr_img || iaConfig?.admin_config?.qr_pago_url || '';
+  let texto = iaConfig?.qr_pago_texto || iaConfig?.qr_texto || 'QR de pago';
+  if (qr) return { qr, texto };
+  try {
+    const { data } = await supabase
+      .from('empresa_admin_config')
+      .select('qr_pago_url,qr_pago_img,qr_pago_texto')
+      .eq('empresa_id', empresaId)
+      .maybeSingle();
+    qr = data?.qr_pago_url || data?.qr_pago_img || '';
+    texto = data?.qr_pago_texto || texto;
+  } catch (_) {}
+  return { qr, texto };
+}
+
+function pidioQrPago(texto = '') {
+  const t = String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return t.includes('qr') || t.includes('q r') || t.includes('pago') || t.includes('pagar') ||
+    t.includes('pagarte') || t.includes('transferencia') || t.includes('reserva') ||
+    t.includes('reservar') || t.includes('mio') || t.includes('case') ||
+    t.includes('anot') || t.includes('lo quiero') || t.includes('quiero esa');
+}
+
 async function processEvolutionIncomingEvent(event, fullPayload = {}) {
   let empresa = null;
   let lead = null;
@@ -262,6 +287,11 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
         return { ok: true, skipped: true, reason: 'from_me_auto_greeting_ignored', telefono: event.from };
       }
 
+      // V16.20 HOTFIX:
+      // Evolution/WhatsApp puede devolver cualquier mensaje saliente como fromMe=true
+      // (eco de IA, saludo automático o mensajes del teléfono). Para no matar la IA,
+      // ya NO pausamos automáticamente por fromMe. La pausa real se hace con /ia off
+      // o desde el panel del SaaS. Guardamos el evento como saliente y lo ignoramos.
       await saveConversation({
         empresaId: empresa.id,
         leadId: lead.id,
@@ -270,12 +300,11 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
         mensaje: event.text,
         tipo: event.type,
         waMessageId: event.waMessageId,
-        metadata: { provider: 'evolution', evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName, from_me: true, human_manual: true }
-      });
+        metadata: { provider: 'evolution', evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName, from_me: true, human_manual: false, ignored_from_me: true }
+      }).catch(() => null);
 
-      await setConversationIaPaused({ empresaId: empresa.id, telefono: event.from, paused: true, motivo: 'humano_respondio_desde_celular' });
-      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_ia_paused_by_human_reply', payload: event, estado: 'ok' });
-      return { ok: true, skipped: true, reason: 'from_me_human_takeover', telefono: event.from };
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_from_me_outgoing_ignored_no_pause', payload: event, estado: 'ok' });
+      return { ok: true, skipped: true, reason: 'from_me_ignored_no_pause', telefono: event.from };
     }
 
     // 2) Mensaje entrante real del cliente: guardarlo en historial.
@@ -342,16 +371,22 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     const evoResponse = await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: ai.respuesta });
 
     let evoQrResponse = null;
-    const textoClienteQR = String(event.text || '').toLowerCase();
-    const pidioQR = /\b(qr|q r|pago|pagar|pagarte|transferencia|reservar|reserva|m[ií]o|mio|case|anot(a|e|ame)|lo quiero)\b/i.test(textoClienteQR);
-    const qrPago = iaConfig?.qr_pago_url || iaConfig?.qr_img || iaConfig?.admin_config?.qr_pago_url || '';
-    if ((ai.enviar_qr || pidioQR) && qrPago) {
+    const pidioQR = pidioQrPago(event.text);
+    const qrCfg = await getQrPagoSeguro(empresa.id, iaConfig);
+    if ((ai.enviar_qr || pidioQR) && qrCfg.qr) {
       evoQrResponse = await sendEvolutionImage({
         instanceName: integration.instance_name || event.instanceName,
         to: event.from,
-        image: qrPago,
-        caption: iaConfig.qr_pago_texto || iaConfig.qr_texto || 'QR de pago'
+        image: qrCfg.qr,
+        caption: qrCfg.texto || 'QR de pago'
       }).catch((e) => ({ error: e.message }));
+      if (evoQrResponse?.error) {
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_image_error', payload: { error: evoQrResponse.error, hasQr: Boolean(qrCfg.qr) }, estado: 'error', error: evoQrResponse.error }).catch(() => null);
+      } else {
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_image_sent', payload: { telefono: event.from }, estado: 'ok' }).catch(() => null);
+      }
+    } else if ((ai.enviar_qr || pidioQR) && !qrCfg.qr) {
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_requested_but_not_configured', payload: { texto: event.text }, estado: 'error', error: 'QR no configurado en empresa_admin_config.qr_pago_url' }).catch(() => null);
     }
 
     await saveWebhookLog({

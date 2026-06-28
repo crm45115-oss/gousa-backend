@@ -312,6 +312,32 @@ app.get('/api/empresa/:empresaId/whatsapp-status', requireDashboardKey, async (r
 });
 
 // Lectura simple para dashboard externo si no quieres leer directo desde Supabase.
+
+// V16.20: lectura de chats para dashboard sin depender del anon key de Supabase en frontend.
+app.get('/api/chats', requireDashboardKey, async (req, res) => {
+  try {
+    const empresaId = req.query.empresaId || req.query.empresa_id;
+    if (!empresaId) return res.status(400).json({ ok: false, error: 'Falta empresaId.' });
+    const [msgs, convs] = await Promise.all([
+      supabase.from('conversacion_mensajes')
+        .select('id,empresa_id,conversacion_id,telefono,direccion,from_me,tipo,mensaje,created_at')
+        .eq('empresa_id', empresaId)
+        .order('created_at', { ascending: false })
+        .limit(1000),
+      supabase.from('conversaciones')
+        .select('id,empresa_id,lead_id,telefono,ultimo_mensaje,estado,ia_pausada,unread_count,created_at,updated_at')
+        .eq('empresa_id', empresaId)
+        .order('updated_at', { ascending: false })
+        .limit(300)
+    ]);
+    if (msgs.error) throw msgs.error;
+    if (convs.error) throw convs.error;
+    res.json({ ok: true, mensajes: msgs.data || [], conversaciones: convs.data || [] });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.get('/api/bootstrap', requireDashboardKey, async (req, res) => {
   try {
     const phoneNumberId = req.query.phoneNumberId || config.phoneNumberId;
