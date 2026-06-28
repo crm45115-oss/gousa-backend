@@ -289,10 +289,14 @@ async function getQrPagoSeguro(empresaId, iaConfig = {}) {
 
 function pidioQrPago(texto = '') {
   const t = String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  return t.includes('qr') || t.includes('q r') || t.includes('pago') || t.includes('pagar') ||
-    t.includes('pagarte') || t.includes('transferencia') || t.includes('reserva') ||
-    t.includes('reservar') || t.includes('mio') || t.includes('case') ||
-    t.includes('anot') || t.includes('lo quiero') || t.includes('quiero esa');
+  // V16.38: QR directo solo cuando lo pide claro. Antes palabras como "pago", "case" o "anotar" disparaban QR o comprobante por error.
+  if (esPreguntaMismoQrTexto(t)) return false;
+  return t.includes('qr') || t.includes('q r') ||
+    t.includes('pasame el qr') || t.includes('pásame el qr') ||
+    t.includes('mandame qr') || t.includes('mándame qr') ||
+    t.includes('enviame qr') || t.includes('envíame qr') ||
+    t.includes('quiero pagar') || t.includes('para pagar') ||
+    t.includes('lo quiero') || t.includes('quiero esa');
 }
 
 function normalizeTextBasic(texto = '') {
@@ -301,9 +305,18 @@ function normalizeTextBasic(texto = '') {
 
 function esComprobanteTexto(texto = '') {
   const t = normalizeTextBasic(texto);
+  // V16.38: una pregunta sobre QR o un texto suelto como "al mismo QR" NO es comprobante.
+  if (esPreguntaMismoQrTexto(t)) return false;
   return t.includes('comprobante') || t.includes('pague') || t.includes('pagado') ||
-    t.includes('transferi') || t.includes('deposito') || t.includes('depósito') ||
-    t.includes('recibo') || t.includes('voucher') || t.includes('captura de pago');
+    t.includes('transferi') || t.includes('recibo') || t.includes('voucher') || t.includes('captura de pago') ||
+    (t.includes('deposito') && (t.includes('listo') || t.includes('ya') || t.includes('hice') || t.includes('realice') || t.includes('realicé')));
+}
+
+function esPreguntaMismoQrTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return (t.includes('mismo qr') || t.includes('el mismo qr') || t.includes('al mismo qr') ||
+    t.includes('mismo q r') || t.includes('el mismo q r') ||
+    (t.includes('mismo') && (t.includes('qr') || t.includes('q r'))));
 }
 
 function esImagenSinTextoClaro(event) {
@@ -490,6 +503,11 @@ async function responderTextoEvolution({ empresa, lead, event, integration, resp
   const evoResponse = await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: respuesta });
   await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: `evolution_${reglaLocal}`, payload: { telefono: event.from }, estado: 'ok' }).catch(() => null);
   return { ok: true, provider: 'evolution', telefono: event.from, lead_id: lead.id, respuesta, evolution: evoResponse };
+}
+
+async function responderMismoQrEvolution({ empresa, lead, event, integration }) {
+  const respuesta = 'Sí bella 😊 puedes pagar al mismo QR que te enviamos. Cuando realices el pago, envíame el comprobante por aquí para que el equipo lo revise. 💜';
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'mismo_qr_confirmado', estadoNuevo: 'qr_enviado' });
 }
 
 async function responderDeliveryEvolution({ empresa, lead, event, integration }) {
@@ -899,6 +917,9 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     }
 
     if (isAmericanStyle(empresa, iaConfigPre)) {
+      if (esPreguntaMismoQrTexto(event.text)) {
+        return await responderMismoQrEvolution({ empresa, lead, event, integration });
+      }
       // V16.27: imagen sola durante flujo de prenda = captura de prenda, NO comprobante.
       // Solo se acepta comprobante si el texto/caption habla de pago/comprobante.
       if (esEventoMedia(event) && !esComprobanteTexto(event.text)) {

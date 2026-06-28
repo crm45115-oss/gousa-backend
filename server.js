@@ -447,6 +447,14 @@ app.post('/api/chats/control', requireDashboardKey, handleDashboardTakeChat);
 app.post('/api/chats/pause', requireDashboardKey, handleDashboardTakeChat);
 app.post('/api/dashboard/chats/take', requireDashboardKey, handleDashboardTakeChat);
 app.post('/api/whatsapp/chats/take', requireDashboardKey, handleDashboardTakeChat);
+// V16.38: aliases adicionales porque algunos frontends anteriores llaman estas rutas.
+app.post('/api/conversaciones/tomar', requireDashboardKey, handleDashboardTakeChat);
+app.post('/api/conversaciones/pausar-ia', requireDashboardKey, handleDashboardTakeChat);
+app.post('/api/conversations/take', requireDashboardKey, handleDashboardTakeChat);
+app.post('/api/chat/take', requireDashboardKey, handleDashboardTakeChat);
+app.post('/api/tomar-chat', requireDashboardKey, handleDashboardTakeChat);
+app.post('/api/ia/pause', requireDashboardKey, handleDashboardTakeChat);
+
 
 app.get('/api/bootstrap', requireDashboardKey, async (req, res) => {
   try {
