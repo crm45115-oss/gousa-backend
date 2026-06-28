@@ -485,6 +485,60 @@ async function responderComprobanteEvolution({ empresa, lead, event, integration
   return { ok: true, provider: 'evolution', telefono: event.from, lead_id: lead.id, respuesta, evolution: evoResponse };
 }
 
+
+async function responderRegistroInicialEvolution({ empresa, lead, event, integration }) {
+  const respuesta = `Hola bella 😊 bienvenida a American Style. Para registrarte bien tu pedido, envíame por favor:
+
+• Tu nombre completo
+• Tu alias de TikTok con el que comentas en el Live
+
+Después mándame la captura de la prenda para apartarla correctamente. 💜`;
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'registro_inicial_live', estadoNuevo: 'esperando_datos_iniciales' });
+}
+
+async function responderPedirCapturaEvolution({ empresa, lead, event, integration }) {
+  const respuesta = 'Perfecto bella 😊 ahora mándame la captura de la prenda para registrarla correctamente. Trabajamos con captura para evitar confusiones durante el Live. 💜';
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'pedir_captura_prenda', estadoNuevo: 'esperando_captura_prenda' });
+}
+
+async function responderCapturaPrendaEvolution({ empresa, lead, event, integration, iaConfig = {} }) {
+  const qrCfg = await getQrPagoSeguro(empresa.id, iaConfig);
+  const respuestaTexto = cleanOutgoingText(qrCfg.qr
+    ? 'Perfecto bella 😊 recibí la captura de tu prenda. Te paso el QR para reservarla. Cuando hagas el pago, envíame el comprobante por aquí para que el equipo lo revise.'
+    : 'Perfecto bella 😊 recibí la captura de tu prenda. Aún no está configurado el QR de esta tienda, el equipo te ayudará por aquí.');
+
+  let evoQrResponse = null;
+  if (qrCfg.qr) {
+    try {
+      evoQrResponse = await sendEvolutionImage({
+        instanceName: integration.instance_name || event.instanceName,
+        to: event.from,
+        image: qrCfg.qr,
+        caption: respuestaTexto
+      });
+    } catch (e) {
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_image_error_after_capture', payload: { telefono: event.from, qrSource: qrCfg.source }, estado: 'error', error: e.message }).catch(() => null);
+      await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: respuestaTexto }).catch(() => null);
+    }
+  } else {
+    await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: respuestaTexto }).catch(() => null);
+  }
+
+  await saveConversation({
+    empresaId: empresa.id,
+    leadId: lead.id,
+    telefono: event.from,
+    rol: 'ia',
+    mensaje: respuestaTexto,
+    tipo: qrCfg.qr ? 'image' : 'text',
+    metadata: { provider: 'evolution', regla_local: 'captura_prenda_qr', from_me: true, qr_enviado: Boolean(qrCfg.qr), qrSource: qrCfg.source }
+  }).catch(() => null);
+  await setConversationStateLocal({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, estado: 'qr_enviado', metadata: { reglaLocal: 'captura_prenda_qr', qr_enviado: Boolean(qrCfg.qr), qrSource: qrCfg.source } });
+  await upsertLiveFardoPedido({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, aiData: { enviar_qr: Boolean(qrCfg.qr), lead_updates: { etapa: 'qr_enviado', estado: 'esperando_comprobante' } }, incomingText: '[captura_prenda]' }).catch(() => null);
+  await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_captura_prenda_recibida_qr', payload: { telefono: event.from, qr_enviado: Boolean(qrCfg.qr), qrSource: qrCfg.source }, estado: 'ok' }).catch(() => null);
+  return { ok: true, provider: 'evolution', telefono: event.from, lead_id: lead.id, respuesta: respuestaTexto, qr_enviado: Boolean(qrCfg.qr), evolution: evoQrResponse };
+}
+
 async function enviarQrEvolutionDirecto({ empresa, lead, event, integration, iaConfig = {} }) {
   const qrCfg = await getQrPagoSeguro(empresa.id, iaConfig);
   const respuestaTexto = cleanOutgoingText(qrCfg.qr
@@ -664,7 +718,7 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
       mensaje: event.text,
       tipo: event.type,
       waMessageId: event.waMessageId,
-      metadata: { provider: 'evolution', evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName, from_me: false }
+      metadata: { provider: 'evolution', evolution: event.rawMessage, instanceName: event.instanceName, contact_name: event.contactName, from_me: false, media_url: event.mediaUrl || null, media_mime_type: event.mimeType || null, media_filename: event.fileName || null }
     });
 
     if (lead.bloqueado) {
@@ -700,17 +754,22 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     const iaConfigPre = await getIaConfig(empresa.id).catch(() => ({}));
     const state = await getConversationStateLocal({ empresaId: empresa.id, telefono: event.from });
 
-    // V16.26: una imagen sola NO es comprobante. Solo se responde si el texto/caption dice pago/comprobante.
-    if (esEventoMedia(event) && !esComprobanteTexto(event.text)) {
-      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_media_saved_no_auto_reply', payload: { telefono: event.from, type: event.type, texto: event.text, estado: state.estado }, estado: 'ok' }).catch(() => null);
-      return { ok: true, skipped: true, reason: 'media_guardada_sin_respuesta', telefono: event.from };
-    }
-
     if (esComprobanteTexto(event.text)) {
       return await responderComprobanteEvolution({ empresa, lead, event, integration });
     }
 
     if (isAmericanStyle(empresa, iaConfigPre)) {
+      // V16.27: imagen sola durante flujo de prenda = captura de prenda, NO comprobante.
+      // Solo se acepta comprobante si el texto/caption habla de pago/comprobante.
+      if (esEventoMedia(event) && !esComprobanteTexto(event.text)) {
+        const estadosCaptura = ['inicio','live_detectado','esperando_datos_iniciales','esperando_captura_prenda'];
+        if (estadosCaptura.includes(String(state?.estado || 'inicio'))) {
+          return await responderCapturaPrendaEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
+        }
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_media_saved_no_auto_reply', payload: { telefono: event.from, type: event.type, texto: event.text, estado: state.estado }, estado: 'ok' }).catch(() => null);
+        return { ok: true, skipped: true, reason: 'media_guardada_sin_respuesta', telefono: event.from };
+      }
+
       if (esSinCapturaTexto(event.text)) {
         return await responderSinCapturaEvolution({ empresa, lead, event, integration });
       }
@@ -732,6 +791,17 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
       if (esMasTardeTexto(event.text)) {
         return await responderMasTardeEvolution({ empresa, lead, event, integration, state });
       }
+      // Primer contacto: registrar nombre + alias TikTok y pedir captura antes de QR.
+      const estadoActual = String(state?.estado || 'inicio');
+      if (estadoActual === 'inicio' && textoClaroEvento(event.text)) {
+        return await responderRegistroInicialEvolution({ empresa, lead, event, integration });
+      }
+      if (estadoActual === 'esperando_datos_iniciales' && textoClaroEvento(event.text)) {
+        return await responderPedirCapturaEvolution({ empresa, lead, event, integration });
+      }
+    } else if (esEventoMedia(event) && !esComprobanteTexto(event.text)) {
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_media_saved_no_auto_reply', payload: { telefono: event.from, type: event.type, texto: event.text, estado: state.estado }, estado: 'ok' }).catch(() => null);
+      return { ok: true, skipped: true, reason: 'media_guardada_sin_respuesta', telefono: event.from };
     }
 
     const pidioQRDirecto = pidioQrPago(event.text) || await usuarioEstaConfirmandoQr({ empresaId: empresa.id, telefono: event.from, texto: event.text });

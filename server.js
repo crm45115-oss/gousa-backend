@@ -320,32 +320,19 @@ app.get('/api/chats', requireDashboardKey, async (req, res) => {
     if (!empresaId) return res.status(400).json({ ok: false, error: 'Falta empresaId.' });
     const [msgs, convs] = await Promise.all([
       supabase.from('conversacion_mensajes')
-        .select('*')
+        .select('id,empresa_id,conversacion_id,telefono,direccion,from_me,tipo,mensaje,media_url,media_mime_type,media_filename,payload,origen,created_at')
         .eq('empresa_id', empresaId)
         .order('created_at', { ascending: false })
         .limit(1000),
       supabase.from('conversaciones')
-        .select('*')
+        .select('id,empresa_id,lead_id,telefono,ultimo_mensaje,estado,ia_pausada,unread_count,instance_name,provider,created_at,updated_at')
         .eq('empresa_id', empresaId)
         .order('updated_at', { ascending: false })
         .limit(300)
     ]);
     if (msgs.error) throw msgs.error;
     if (convs.error) throw convs.error;
-
-    const phones = [...new Set([...(msgs.data || []), ...(convs.data || [])]
-      .map((x) => onlyDigits(x.telefono || x.whatsapp || x.celular || ''))
-      .filter(Boolean))];
-    let leads = { data: [], error: null };
-    if (phones.length) {
-      leads = await supabase.from('leads')
-        .select('*')
-        .eq('empresa_id', empresaId)
-        .in('telefono', phones.slice(0, 300));
-      if (leads.error) console.warn('[api/chats leads]', leads.error.message);
-    }
-
-    res.json({ ok: true, mensajes: msgs.data || [], conversaciones: convs.data || [], leads: leads.data || [] });
+    res.json({ ok: true, mensajes: msgs.data || [], conversaciones: convs.data || [] });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }

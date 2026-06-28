@@ -152,6 +152,30 @@ function normalizeEvolutionEvent(payload = {}) {
   return { instanceName, event };
 }
 
+function extractEvolutionMediaInfo(item = {}, msg = {}) {
+  const image = msg.imageMessage || item.imageMessage || item.message?.imageMessage || null;
+  const video = msg.videoMessage || item.videoMessage || item.message?.videoMessage || null;
+  const doc = msg.documentMessage || item.documentMessage || item.message?.documentMessage || null;
+  const audio = msg.audioMessage || item.audioMessage || item.message?.audioMessage || null;
+  const mediaObj = image || video || doc || audio || null;
+  const base64Raw =
+    item.base64 || item.mediaBase64 || item.message?.base64 || item.data?.base64 ||
+    mediaObj?.base64 || mediaObj?.jpegThumbnail || mediaObj?.thumbnail || '';
+  const url =
+    item.mediaUrl || item.url || item.fileUrl || item.downloadUrl || item.data?.url ||
+    mediaObj?.url || mediaObj?.mediaUrl || mediaObj?.directPath || '';
+  const mimeType = mediaObj?.mimetype || mediaObj?.mimeType || item.mimetype || item.mimeType || '';
+  const fileName = mediaObj?.fileName || item.fileName || item.filename || '';
+  let mediaUrl = String(url || '').trim();
+  const base64 = String(base64Raw || '').trim();
+  if (!mediaUrl && base64) {
+    const mime = mimeType || (image ? 'image/jpeg' : video ? 'video/mp4' : audio ? 'audio/ogg' : 'application/octet-stream');
+    if (base64.startsWith('data:')) mediaUrl = base64;
+    else mediaUrl = `data:${mime};base64,${base64.replace(/^data:[^,]+,/, '')}`;
+  }
+  return { mediaUrl, mimeType, fileName };
+}
+
 function extractEvolutionMessages(payload = {}) {
   const { instanceName, event } = normalizeEvolutionEvent(payload);
   const data = payload.data || payload.message || payload.messages || payload;
@@ -165,6 +189,13 @@ function extractEvolutionMessages(payload = {}) {
     const from = onlyDigits(String(remoteJid).split('@')[0]);
     if (!from) continue;
     const msg = item.message || item.messages || item;
+    let type = 'text';
+    if (msg.imageMessage) type = 'image';
+    else if (msg.documentMessage) type = 'document';
+    else if (msg.audioMessage) type = 'audio';
+    else if (msg.videoMessage) type = 'video';
+    else if (msg.stickerMessage) type = 'sticker';
+    const mediaInfo = extractEvolutionMediaInfo(item, msg);
     const text =
       msg.conversation ||
       msg.extendedTextMessage?.text ||
@@ -173,21 +204,19 @@ function extractEvolutionMessages(payload = {}) {
       msg.videoMessage?.caption ||
       item.text ||
       item.body ||
-      '[Mensaje recibido]';
-    let type = 'text';
-    if (msg.imageMessage) type = 'image';
-    else if (msg.documentMessage) type = 'document';
-    else if (msg.audioMessage) { type = 'audio'; }
-    else if (msg.videoMessage) type = 'video';
+      (type === 'image' ? '[Imagen recibida]' : type === 'audio' ? '[Audio recibido]' : type === 'video' ? '[Video recibido]' : type === 'document' ? '[Documento recibido]' : '[Mensaje recibido]');
     out.push({
       instanceName,
       event,
       from,
-      text: type === 'audio' && text === '[Mensaje recibido]' ? '[Audio recibido]' : String(text),
+      text: String(text),
       type,
       waMessageId: key.id || item.id || `evo.${Date.now()}`,
       contactName: item.pushName || item.senderName || item.name || '',
       fromMe,
+      mediaUrl: mediaInfo.mediaUrl,
+      mimeType: mediaInfo.mimeType,
+      fileName: mediaInfo.fileName,
       rawMessage: item
     });
   }

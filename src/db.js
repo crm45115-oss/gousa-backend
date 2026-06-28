@@ -289,6 +289,10 @@ async function saveConversation({ empresaId, leadId, telefono, rol, mensaje, tip
   });
 
   const direccion = rol === 'cliente' && !fromMe ? 'entrante' : 'saliente';
+  const mediaUrl = metadata?.media_url || metadata?.mediaUrl || metadata?.archivo_url || metadata?.evolution?.mediaUrl || null;
+  const mediaMimeType = metadata?.media_mime_type || metadata?.mimeType || metadata?.evolution?.mimeType || null;
+  const mediaFilename = metadata?.media_filename || metadata?.fileName || metadata?.evolution?.fileName || null;
+
   const msgPayload = {
     empresa_id: empresaId,
     conversacion_id: conversation.id,
@@ -298,6 +302,9 @@ async function saveConversation({ empresaId, leadId, telefono, rol, mensaje, tip
     origen: provider,
     tipo,
     mensaje,
+    media_url: mediaUrl,
+    media_mime_type: mediaMimeType,
+    media_filename: mediaFilename,
     payload: { waMessageId, rol, metadata }
   };
 
