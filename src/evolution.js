@@ -119,6 +119,26 @@ async function sendEvolutionText({ instanceName, to, text }) {
   });
 }
 
+async function sendEvolutionImage({ instanceName, to, image, caption = 'QR de pago' }) {
+  if (!instanceName) throw new Error('Falta instanceName para enviar imagen por Evolution.');
+  const number = onlyDigits(to);
+  if (!number) throw new Error('Falta número destino.');
+  let media = String(image || '').trim();
+  if (!media) throw new Error('Falta imagen QR.');
+  if (media.startsWith('data:image/')) media = media.split(',')[1] || media;
+  return evoRequest(`/message/sendMedia/${encodeURIComponent(instanceName)}`, {
+    method: 'POST',
+    body: {
+      number,
+      mediatype: 'image',
+      media,
+      caption: String(caption || '').slice(0, 1024),
+      fileName: 'qr-pago.jpg',
+      delay: 500
+    }
+  });
+}
+
 function extractQrFromEvolution(data = {}) {
   const base64 = data.base64 || data.qrcode?.base64 || data.qr?.base64 || data.qrCode?.base64 || data.qrcode || '';
   const code = data.code || data.qrcode?.code || data.qr?.code || data.qrCode?.code || '';
@@ -182,6 +202,7 @@ module.exports = {
   getEvolutionState,
   logoutEvolutionInstance,
   sendEvolutionText,
+  sendEvolutionImage,
   extractQrFromEvolution,
   normalizeEvolutionEvent,
   extractEvolutionMessages

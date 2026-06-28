@@ -59,8 +59,17 @@ function jsonContract() {
     "comentarios": "",
     "estado": "en_proceso",
     "etapa": "interesado",
-    "requiere_asesor": false
-  }
+    "requiere_asesor": false,
+    "tipo_entrega": "",
+    "direccion_entrega": "",
+    "ubicacion_entrega": "",
+    "ciudad_destino": "",
+    "departamento_destino": "",
+    "transportadora": "",
+    "estado_entrega": "",
+    "costo_despacho_transportadora": null
+  },
+  "enviar_qr": false
 }`;
 }
 
@@ -199,7 +208,7 @@ ${iaConfig.reglas || ''}
 - Si no sabes algo, di que Fernando lo revisará.
 
 MENSAJE DE BIENVENIDA BASE:
-${iaConfig.mensaje_bienvenida || '¡Hola! Soy el asistente de Fernando Web 😊 Ayudamos a negocios con páginas web, WordPress, hosting, dominio, correos corporativos, IA para WhatsApp y sistemas como ChatFlow 360. Tenemos una promo de página web + hosting + dominio por 1500 Bs y 1 mes gratis de IA en WhatsApp. ¿Qué tipo de negocio tienes?'}
+${iaConfig.mensaje_bienvenida || '👋 ¡Hola! Bienvenido a Fernando Web Studio. Aquí creamos páginas web profesionales, WordPress, hosting, correos corporativos, IA para WhatsApp y sistemas digitales para negocios. Cuéntame, ¿qué tipo de proyecto necesitas o qué te gustaría mejorar en tu negocio?'}
 
 CIERRE COMERCIAL PARA AGENDAR:
 “Perfecto 😊 Con lo que me cuentas, Fernando puede prepararte una propuesta clara. ¿Qué día y hora te queda bien para una llamada corta?”
@@ -224,6 +233,15 @@ ${JSON.stringify(lead || {}, null, 2)}
 
 HISTORIAL RECIENTE:
 ${historial || 'Sin historial previo.'}
+
+CUANDO CLASIFIQUES ENTREGA USA lead_updates.tipo_entrega EXACTAMENTE:
+- recojo_trompillo
+- yango_desde_trompillo
+- delivery_normal
+- departamento_provincia
+- punto_rosa
+- acumulado
+También llena si aparece: direccion_entrega, ubicacion_entrega, ciudad_destino, departamento_destino, transportadora, estado_entrega.
 
 MENSAJE NUEVO DEL CLIENTE:
 ${incomingText}
@@ -253,6 +271,27 @@ ${iaConfig.tono || 'Amable, cercano, breve, vendedor y natural tipo WhatsApp.'}
 
 REGLAS DE ATENCIÓN PARA ROPA:
 ${iaConfig.reglas || ''}
+
+CONFIGURACIÓN EDITABLE DE ENTREGA/PAGO DE ESTA TIENDA:
+- TikTok/Live: ${iaConfig.tiktok || 'No configurado'}
+- QR de pago/texto: ${iaConfig.qr_pago_texto || iaConfig.qr_texto || 'QR configurado por la tienda.'}
+- Recojo principal: ${iaConfig.punto_recojo || 'Plaza El Trompillo'}
+- Horario de recojo: ${iaConfig.horario_recojo || 'lunes de 4:00 p. m. a 5:00 p. m.'}
+- Yango desde punto de recojo: ${iaConfig.yango_desde_trompillo || 'solo lunes desde Plaza El Trompillo para abaratar costo'}
+- Delivery normal: ${iaConfig.delivery_normal || 'martes a viernes, pedir ubicación o dirección exacta'}
+- Envíos a departamentos/provincias: ${iaConfig.envios_departamento || 'sí se hacen; se cobra 5 Bs por dejar en transportadora aparte del costo de la transportadora'}
+- Costo despacho a transportadora: ${iaConfig.costo_despacho_transportadora || 5} Bs
+- Punto Rosa/no recogió: ${iaConfig.punto_rosa || 'Si no recogió el lunes, las prendas pueden dejarse en Punto Rosa; Punto Rosa cobra resguardo por semana según bulto/bolsa y ya no depende de la tienda.'}
+
+FLUJOS OBLIGATORIOS:
+- NO digas reglas de entrega en el primer mensaje. Solo úsalas si la clienta pregunta o elige una forma de entrega.
+- Si pregunta “dónde entregan”, “me anotas”, “recojo”, responde que el recojo es en Plaza El Trompillo lunes de 4:00 a 5:00 p. m. y marca tipo_entrega=recojo_trompillo.
+- Si pide Yango desde la plaza o quiere que se lo envíen desde el Trompillo, explica que puede ser el lunes desde Plaza El Trompillo para abaratar costo y pide ubicación. Marca tipo_entrega=yango_desde_trompillo.
+- Si pide delivery/Yango normal, pide ubicación o dirección exacta y referencia. Marca tipo_entrega=delivery_normal.
+- Si pide departamento, provincia o interior, explica que sí se envía y que se cobran 5 Bs por dejar en transportadora, aparte de lo que cobre la transportadora. Pide poco a poco: nombre completo, ciudad/provincia/departamento, celular y transportadora preferida. Marca tipo_entrega=departamento_provincia.
+- Si no recogió y pregunta por su pedido, responde que puede pasar a Punto Rosa y que Punto Rosa cobra por semana según el bulto/bolsa; no inventes monto. Marca tipo_entrega=punto_rosa si corresponde.
+- Si pide QR/pagar/reservar, responde natural, indica que enviará el QR configurado y pide comprobante. Marca enviar_qr=true. No confirmes pago.
+
 - Si la clienta saluda o dice que quiere ropa, responde como tienda de ropa.
 - Si dice “vengo del live”, “del live”, “quiero esa”, “quiero esta prenda”, pide captura de la prenda.
 - Si manda captura o describe una prenda, pide nombre y zona/ciudad si falta.
@@ -290,6 +329,15 @@ ${JSON.stringify(lead || {}, null, 2)}
 HISTORIAL RECIENTE:
 ${historial || 'Sin historial previo.'}
 
+CUANDO CLASIFIQUES ENTREGA USA lead_updates.tipo_entrega EXACTAMENTE:
+- recojo_trompillo
+- yango_desde_trompillo
+- delivery_normal
+- departamento_provincia
+- punto_rosa
+- acumulado
+También llena si aparece: direccion_entrega, ubicacion_entrega, ciudad_destino, departamento_destino, transportadora, estado_entrega.
+
 MENSAJE NUEVO DEL CLIENTE:
 ${incomingText}
 
@@ -321,6 +369,15 @@ ${JSON.stringify(lead || {}, null, 2)}
 
 HISTORIAL RECIENTE:
 ${historial || 'Sin historial previo.'}
+
+CUANDO CLASIFIQUES ENTREGA USA lead_updates.tipo_entrega EXACTAMENTE:
+- recojo_trompillo
+- yango_desde_trompillo
+- delivery_normal
+- departamento_provincia
+- punto_rosa
+- acumulado
+También llena si aparece: direccion_entrega, ubicacion_entrega, ciudad_destino, departamento_destino, transportadora, estado_entrega.
 
 MENSAJE NUEVO DEL CLIENTE:
 ${incomingText}
@@ -369,6 +426,15 @@ ${JSON.stringify(lead || {}, null, 2)}
 
 HISTORIAL RECIENTE:
 ${historial || 'Sin historial previo.'}
+
+CUANDO CLASIFIQUES ENTREGA USA lead_updates.tipo_entrega EXACTAMENTE:
+- recojo_trompillo
+- yango_desde_trompillo
+- delivery_normal
+- departamento_provincia
+- punto_rosa
+- acumulado
+También llena si aparece: direccion_entrega, ubicacion_entrega, ciudad_destino, departamento_destino, transportadora, estado_entrega.
 
 MENSAJE NUEVO DEL CLIENTE:
 ${incomingText}
@@ -461,6 +527,10 @@ function cleanWhatsappAnswer(value) {
   const match = raw.match(/^\s*[\{]?\s*["']?respuesta["']?\s*[:=]\s*["']([\s\S]*?)["']\s*[\}]?\s*$/i);
   if (match) return match[1].trim();
 
+  // V16.18: si quedó JSON mal cerrado tipo { "respuesta": "texto", ... extraer solo el valor.
+  const loose = raw.match(/["']respuesta["']\s*:\s*["']([\s\S]*?)["']\s*(?:,|}|$)/i);
+  if (loose) return loose[1].replace(/\\n/g, '\n').trim();
+
   return raw;
 }
 
@@ -478,7 +548,9 @@ function normalizeAiResponse(text) {
     respuesta: limitText(cleanWhatsappAnswer(parsed.respuesta) || 'Gracias por escribir. ¿Me indica su nombre?', 1200),
     requiere_asesor: Boolean(parsed.requiere_asesor || parsed.derivar),
     motivo_derivacion: parsed.motivo_derivacion || '',
-    lead_updates: parsed.lead_updates || parsed.lead || {}
+    lead_updates: parsed.lead_updates || parsed.lead || {},
+    enviar_qr: Boolean(parsed.enviar_qr || parsed.enviarQR || parsed.send_qr),
+    archivo: parsed.archivo || null
   };
 }
 
@@ -487,10 +559,10 @@ function mockReply({ incomingText, lead, empresa }) {
   const text = String(incomingText || '').toLowerCase();
   const requires = ['asesor', 'humano', 'precio', 'costo', 'pago', 'qr', 'comprobante', 'reclamo'].some((x) => text.includes(x));
   if (rubro.includes('negocio_digital') || rubro.includes('digital') || rubro.includes('wordpress') || rubro.includes('hosting') || rubro.includes('chatflow')) {
-    let respuesta = '¡Hola! Soy el asistente de Fernando Web 😊 Ayudamos a negocios con páginas web, WordPress, hosting, dominio, correos corporativos, IA para WhatsApp y ChatFlow 360. Tenemos una promo: página web + hosting + dominio por 1500 Bs y 1 mes gratis de IA en WhatsApp. ¿Qué tipo de negocio tienes?';
+    let respuesta = '👋 ¡Hola! Bienvenido a Fernando Web Studio. Aquí creamos páginas web profesionales, WordPress, hosting, correos corporativos, IA para WhatsApp y sistemas digitales para negocios. Cuéntame, ¿qué tipo de proyecto necesitas o qué te gustaría mejorar en tu negocio?';
     if (text.includes('promo') || text.includes('promocion') || text.includes('promoción') || text.includes('oferta')) respuesta = 'Sí 😊 Tenemos una promoción especial: página web profesional + hosting + dominio por 1500 Bs, y te regalamos 1 mes gratis de IA en WhatsApp. Para orientarte mejor, ¿qué tipo de negocio tienes?';
-    if (text.includes('precio') || text.includes('costo') || text.includes('cuanto') || text.includes('cuánto')) respuesta = 'Depende de lo que necesites 😊 La promo web incluye página profesional + hosting + dominio por 1500 Bs y 1 mes gratis de IA en WhatsApp. La IA básica sola empieza desde 200 Bs mensuales. ¿Buscas página web o IA para WhatsApp?';
-    if (text.includes('pagina') || text.includes('página') || text.includes('web')) respuesta = 'Perfecto 😊 Para página web tenemos una promo: web profesional + hosting + dominio por 1500 Bs, más 1 mes gratis de IA en WhatsApp. ¿Qué tipo de negocio tienes?';
+    if (text.includes('precio') || text.includes('costo') || text.includes('cuanto') || text.includes('cuánto')) respuesta = 'Depende de lo que necesites 😊 Si buscas un paquete completo, tenemos una promo de página web + hosting + dominio por 1500 Bs y 1 mes gratis de IA en WhatsApp. ¿Buscas página web, IA para WhatsApp o ambas cosas?';
+    if (text.includes('pagina') || text.includes('página') || text.includes('web')) respuesta = 'Perfecto 😊 Podemos ayudarte con una página web profesional. ¿Qué tipo de negocio tienes y qué te gustaría mostrar: servicios, productos, catálogo o información de tu empresa?';
     if (text.includes('wordpress')) respuesta = 'Claro 😊 Podemos crear o rediseñar tu página en WordPress. Si buscas una web desde cero, también tenemos promo con hosting + dominio por 1500 Bs y 1 mes gratis de IA WhatsApp. ¿Ya tienes dominio y hosting?';
     if (text.includes('hosting') || text.includes('correo') || text.includes('dominio')) respuesta = 'Sí 😊 Podemos ayudarte con dominio, hosting y correos corporativos. Ahora tenemos promo de página web + hosting + dominio por 1500 Bs e incluye 1 mes gratis de IA en WhatsApp. ¿Ya tienes dominio comprado?';
     if (text.includes('ia') || text.includes('whatsapp') || text.includes('wasap')) respuesta = 'Sí 😊 Podemos poner una IA en tu WhatsApp para responder consultas, tomar datos y pasar a humano. La IA básica empieza desde 200 Bs mensuales, y si haces tu página con hosting + dominio por 1500 Bs te regalamos 1 mes gratis de IA. ¿Qué negocio tienes?';
@@ -498,11 +570,58 @@ function mockReply({ incomingText, lead, empresa }) {
     return { respuesta, requiere_asesor: requires, motivo_derivacion: requires ? 'Prospecto requiere revisión/cotización de Fernando.' : '', lead_updates: { estado: 'en_proceso', etapa: 'interesado', servicio_solicitado: 'servicios_digitales' } };
   }
   if (rubro.includes('fardo') || rubro.includes('ropa') || rubro.includes('tienda') || rubro.includes('live')) {
-    let respuesta = '¡Hola! Soy el asistente de American Style 😊 ¿Vienes del live o buscas alguna prenda en especial? Puedes enviarme captura de la prenda que te gustó.';
-    if (text.includes('ropa') || text.includes('prenda') || text.includes('live')) respuesta = 'Perfecto 😊 ¿Puedes enviarme una captura de la prenda que te gustó para verificar disponibilidad?';
-    if (text.includes('precio') || text.includes('cuanto') || text.includes('cuánto')) respuesta = 'Claro 😊 Envíame captura de la prenda y el equipo verificará precio y disponibilidad.';
-    if (text.includes('comprobante')) respuesta = 'Gracias, recibimos tu comprobante ✅ El equipo verificará el pago y preparará tu pedido.';
-    return { respuesta, requiere_asesor: requires, motivo_derivacion: requires ? 'Requiere verificación humana.' : '', lead_updates: { estado: 'en_proceso', etapa: 'interesado', servicio_solicitado: 'ropa' } };
+    const upd = { estado: 'en_proceso', etapa: 'interesado', servicio_solicitado: 'ropa' };
+    let enviar_qr = false;
+    let respuesta = '¡Hola! Soy el asistente de '+(empresa.nombre || 'American Style')+' 😊 ¿Vienes del live o buscas alguna prenda en especial? Puedes enviarme captura de la prenda que te gustó.';
+
+    const wantsPago = ['qr','pago','pagar','transferencia','reservar','reservo','apartar','compro'].some(x => text.includes(x));
+    const wantsDepto = ['departamento','provincia','interior','flota','transportadora','encomienda'].some(x => text.includes(x));
+    const wantsYangoTrompillo = (text.includes('yango') || text.includes('delivery')) && (text.includes('trompillo') || text.includes('plaza'));
+    const wantsDelivery = !wantsYangoTrompillo && ['delivery','yango','mandar','envia','envía','ubicacion','ubicación'].some(x => text.includes(x));
+    const wantsRecojo = ['recojo','recoger','paso','plaza','trompillo','anotame','anótame','me anota'].some(x => text.includes(x));
+    const noRecogio = ['no fui','no pude ir','no recogí','no recogi','punto rosa','donde esta mi pedido','dónde está mi pedido'].some(x => text.includes(x));
+
+    if (text.includes('live') || text.includes('captura') || text.includes('mio') || text.includes('mío') || text.includes('quiero esa') || text.includes('quiero esta')) {
+      respuesta = 'Perfecto bella 😊 Envíame la captura de la prenda o el número del live para que el equipo verifique disponibilidad y precio.';
+    }
+    if (text.includes('precio') || text.includes('cuanto') || text.includes('cuánto')) {
+      respuesta = 'Claro bella 😊 Envíame captura de la prenda y el equipo verificará precio y disponibilidad.';
+    }
+    if (wantsRecojo) {
+      upd.tipo_entrega = 'recojo_trompillo';
+      upd.estado_entrega = 'pendiente_recojo';
+      respuesta = 'Claro bella 😊 Te podemos anotar para recojo en la Plaza El Trompillo los lunes de 4:00 p. m. a 5:00 p. m. ¿Me confirmas tu nombre completo para anotarte?';
+    }
+    if (wantsYangoTrompillo) {
+      upd.tipo_entrega = 'yango_desde_trompillo';
+      upd.estado_entrega = 'pendiente_ubicacion';
+      respuesta = 'Claro bella 😊 También podemos enviártelo por Yango desde la Plaza El Trompillo el lunes, así suele salir más económico. Envíame tu ubicación para anotarte.';
+    } else if (wantsDelivery) {
+      upd.tipo_entrega = 'delivery_normal';
+      upd.estado_entrega = 'pendiente_ubicacion';
+      respuesta = 'Claro bella 😊 Para delivery/Yango necesito que me mandes tu ubicación o dirección exacta con referencia. El equipo calcula el costo y coordina el envío.';
+    }
+    if (wantsDepto) {
+      upd.tipo_entrega = 'departamento_provincia';
+      upd.estado_entrega = 'pendiente_datos_envio';
+      upd.costo_despacho_transportadora = 5;
+      respuesta = 'Sí bella 😊 Hacemos envíos a departamentos y provincias. Se cobra 5 Bs por llevar tu pedido hasta la transportadora, aparte de lo que cobre la empresa de transporte. Para preparar tu envío, envíame tu nombre completo, ciudad/provincia de destino, celular y transportadora de preferencia.';
+    }
+    if (noRecogio) {
+      upd.tipo_entrega = 'punto_rosa';
+      upd.estado_entrega = 'disponible_punto_rosa';
+      respuesta = 'Claro bella 😊 Si no pudiste asistir al recojo del lunes, tus prendas pueden dejarse en Punto Rosa. Ellos cobran el resguardo por semana según el bulto de la bolsa; ese cobro ya no depende de nosotros.';
+    }
+    if (wantsPago) {
+      enviar_qr = true;
+      respuesta = 'Claro bella 😊 Te paso el QR para reservar tu prenda. Cuando pagues, envíame el comprobante para que el equipo lo revise y confirme tu pedido.';
+    }
+    if (text.includes('comprobante')) {
+      respuesta = 'Gracias bella, recibimos tu comprobante ✅ El equipo verificará el pago y preparará tu pedido. No te confirmo aún hasta que lo revisen.';
+      upd.estado = 'comprobante_enviado';
+      upd.requiere_asesor = true;
+    }
+    return { respuesta, requiere_asesor: requires, motivo_derivacion: requires ? 'Requiere verificación humana.' : '', enviar_qr, lead_updates: upd };
   }
   let respuesta = '👋 Gracias por escribir a la empresa. Para ayudarte mejor, ¿cuál es tu nombre completo?';
   if (lead?.nombre_completo && !lead?.destino) respuesta = 'Perfecto. ¿A qué destino deseas viajar y cuál es el motivo del viaje?';

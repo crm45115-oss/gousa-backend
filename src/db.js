@@ -87,7 +87,61 @@ async function getIaConfig(empresaId) {
     .limit(1)
     .maybeSingle();
   if (error) console.error('[getIaConfig]', error.message);
-  return data || {};
+
+  // V16.17: configuración editable por cada admin/empresa.
+  // No reemplaza la tabla ia_config: la complementa con redes, políticas,
+  // promociones, planes y prompt personalizado por empresa_id.
+  let adminConfig = null;
+  try {
+    const { data: cfg, error: cfgError } = await supabase
+      .from('empresa_admin_config')
+      .select('*')
+      .eq('empresa_id', empresaId)
+      .maybeSingle();
+    if (cfgError && cfgError.code !== '42P01') console.error('[getIaConfig empresa_admin_config]', cfgError.message);
+    adminConfig = cfg || null;
+  } catch (_) {
+    adminConfig = null;
+  }
+
+  const base = data || {};
+  if (!adminConfig) return base;
+
+  return {
+    ...base,
+    nombre_comercial: adminConfig.nombre_comercial || base.nombre_comercial,
+    nombre_asistente: adminConfig.nombre_asistente || base.nombre_asistente,
+    mensaje_bienvenida: adminConfig.mensaje_bienvenida || base.mensaje_bienvenida,
+    bienvenida: adminConfig.mensaje_bienvenida || base.bienvenida,
+    prompt_personalizado: adminConfig.prompt_personalizado || base.prompt_personalizado,
+    reglas: adminConfig.prompt_personalizado || base.reglas,
+    tiktok: adminConfig.tiktok || base.tiktok,
+    instagram: adminConfig.instagram || base.instagram,
+    facebook: adminConfig.facebook || base.facebook,
+    web: adminConfig.web || base.web,
+    grupo_whatsapp: adminConfig.grupo_whatsapp || base.grupo_whatsapp,
+    horarios: adminConfig.horarios || base.horarios,
+    horario: adminConfig.horarios || base.horario,
+    direccion: adminConfig.direccion || base.direccion,
+    reglas_entrega: adminConfig.reglas_entrega || base.reglas_entrega,
+    reglas_pago: adminConfig.reglas_pago || base.reglas_pago,
+    politicas: adminConfig.politicas || base.politicas,
+    links_portafolio: adminConfig.links_portafolio || base.links_portafolio,
+    planes_precios: adminConfig.planes_precios || base.planes_precios,
+    promociones_activas: adminConfig.promociones_activas || base.promociones_activas,
+    qr_pago_url: adminConfig.qr_pago_url || adminConfig.qr_pago_img || base.qr_pago_url || base.qr_img,
+    qr_pago_texto: adminConfig.qr_pago_texto || base.qr_pago_texto || base.qr_texto,
+    punto_recojo: adminConfig.punto_recojo || base.punto_recojo,
+    horario_recojo: adminConfig.horario_recojo || base.horario_recojo,
+    yango_desde_trompillo: adminConfig.yango_desde_trompillo || base.yango_desde_trompillo,
+    delivery_normal: adminConfig.delivery_normal || base.delivery_normal,
+    envios_departamento: adminConfig.envios_departamento || base.envios_departamento,
+    costo_despacho_transportadora: adminConfig.costo_despacho_transportadora || base.costo_despacho_transportadora,
+    transportadoras: adminConfig.transportadoras || base.transportadoras,
+    punto_rosa: adminConfig.punto_rosa || base.punto_rosa,
+    live_config: adminConfig.live_config || base.live_config,
+    admin_config: adminConfig
+  };
 }
 
 async function getKnowledge(empresaId) {
@@ -155,7 +209,7 @@ function normalizeLeadUpdates(updates = {}) {
     'numero_personas','presupuesto','pasaporte_vigente','necesita_visa',
     'cotiza_pasajes','hotel_incluido','seguro_viaje','servicio_solicitado',
     'comentarios','estado','prioridad','etapa','requiere_asesor','fuera_horario',
-    'bloqueado','etiquetas'
+    'bloqueado','etiquetas','tipo_entrega','direccion_entrega','ubicacion_entrega','ciudad_destino','departamento_destino','transportadora','estado_entrega','punto_entrega','costo_despacho_transportadora'
   ];
   const out = {};
   for (const key of allowed) {
@@ -163,6 +217,7 @@ function normalizeLeadUpdates(updates = {}) {
   }
   if (out.numero_personas !== undefined) out.numero_personas = Number(out.numero_personas) || null;
   if (out.presupuesto !== undefined) out.presupuesto = Number(out.presupuesto) || null;
+  if (out.costo_despacho_transportadora !== undefined) out.costo_despacho_transportadora = Number(out.costo_despacho_transportadora) || null;
   for (const b of ['necesita_visa','cotiza_pasajes','hotel_incluido','seguro_viaje']) {
     if (typeof out[b] === 'string') out[b] = ['si','sí','true','1'].includes(out[b].toLowerCase());
   }
@@ -358,6 +413,43 @@ async function updateLeadFromAi(leadId, aiData = {}) {
   return data;
 }
 
+async function upsertLiveFardoPedido({ empresaId, leadId, telefono, aiData = {}, incomingText = '' }) {
+  const updates = aiData.lead_updates || aiData.lead || {};
+  const tipo = updates.tipo_entrega || '';
+  if (!tipo) return null;
+  const phone = onlyDigits(telefono);
+  const payload = {
+    empresa_id: empresaId,
+    lead_id: leadId || null,
+    telefono: phone,
+    tipo_entrega: tipo,
+    nombre_cliente: updates.nombre_completo || null,
+    direccion_entrega: updates.direccion_entrega || null,
+    ubicacion_entrega: updates.ubicacion_entrega || null,
+    ciudad_destino: updates.ciudad_destino || updates.destino || null,
+    departamento_destino: updates.departamento_destino || null,
+    transportadora: updates.transportadora || null,
+    costo_despacho_transportadora: updates.costo_despacho_transportadora ?? null,
+    estado: updates.estado_entrega || 'pendiente_revision',
+    ultimo_mensaje: incomingText || null,
+    metadata: { ai: aiData },
+    updated_at: nowIso()
+  };
+  try {
+    const { data, error } = await supabase
+      .from('live_fardo_pedidos')
+      .upsert(payload, { onConflict: 'empresa_id,telefono,tipo_entrega' })
+      .select('*')
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  } catch (e) {
+    // No romper WhatsApp si la tabla aún no existe. Ejecutar SQL V16.18 para activar panel real.
+    console.error('[upsertLiveFardoPedido]', e.message || e);
+    return null;
+  }
+}
+
 async function saveWebhookLog({ empresaId = null, leadId = null, evento, payload = {}, estado = 'ok', error = null }) {
   const base = { empresa_id: empresaId, lead_id: leadId, evento, payload, estado, error };
   const { error: errWebhook } = await supabase.from('webhook_logs').insert(base);
@@ -397,6 +489,7 @@ module.exports = {
   saveConversation,
   getConversationHistory,
   updateLeadFromAi,
+  upsertLiveFardoPedido,
   saveWebhookLog,
   saveMessageStatus,
   findConversationHeader,

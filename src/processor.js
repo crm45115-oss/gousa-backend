@@ -7,6 +7,7 @@ const {
   saveConversation,
   getConversationHistory,
   updateLeadFromAi,
+  upsertLiveFardoPedido,
   saveWebhookLog,
   saveMessageStatus,
   findConversationHeader,
@@ -15,9 +16,51 @@ const {
   isConversationPaused
 } = require('./db');
 const { extractIncomingEvents, sendWhatsAppText, markMessageRead } = require('./whatsapp');
-const { extractEvolutionMessages, sendEvolutionText, normalizeEvolutionEvent } = require('./evolution');
+const { extractEvolutionMessages, sendEvolutionText, sendEvolutionImage, normalizeEvolutionEvent } = require('./evolution');
 const { supabase } = require('./supabaseClient');
 const { generateAiReply, cleanWhatsappAnswer } = require('./ai');
+
+
+function isLikelyAutoGreetingText(text = '') {
+  const t = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '');
+  if (!t.trim()) return false;
+  const patterns = [
+    'gracias por comunicarte',
+    'te responderemos a la brevedad',
+    'responderemos a la brevedad',
+    'nos especializamos',
+    'cuentanos que necesitas',
+    'con gusto te ayudaremos',
+    'bienvenido a fernando web',
+    'fernando web studio',
+    'diseno y desarrollo de paginas web',
+    'marketing digital y gestion de redes',
+    'posicionamiento en google'
+  ];
+  return patterns.some((x) => t.includes(x));
+}
+
+async function hasRecentAutoGreetingFromMe({ empresaId, telefono, seconds = 1800 }) {
+  try {
+    const since = new Date(Date.now() - seconds * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('conversacion_mensajes')
+      .select('mensaje,from_me,created_at')
+      .eq('empresa_id', empresaId)
+      .eq('telefono', telefono)
+      .eq('from_me', true)
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(12);
+    if (error) return false;
+    return (data || []).some((row) => isLikelyAutoGreetingText(row.mensaje));
+  } catch (_) {
+    return false;
+  }
+}
 
 async function processWebhookPayload(payload) {
   const events = extractIncomingEvents(payload);
@@ -82,6 +125,7 @@ async function processIncomingEvent(event, fullPayload = {}) {
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
     ai.respuesta = cleanWhatsappAnswer(ai.respuesta);
     const updatedLead = await updateLeadFromAi(lead.id, ai);
+    await upsertLiveFardoPedido({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, aiData: ai, incomingText: event.text }).catch(() => null);
 
     const iaConversation = await saveConversation({
       empresaId: empresa.id,
@@ -211,6 +255,13 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
         return { ok: true, skipped: true, reason: 'from_me_ai_echo_ignored', telefono: event.from };
       }
 
+      // WhatsApp Business puede devolver saludos/ausencias automáticas como fromMe=true.
+      // Eso NO es una intervención humana y no debe pausar la IA.
+      if (isLikelyAutoGreetingText(event.text)) {
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_from_me_auto_greeting_ignored', payload: event, estado: 'ok' });
+        return { ok: true, skipped: true, reason: 'from_me_auto_greeting_ignored', telefono: event.from };
+      }
+
       await saveConversation({
         empresaId: empresa.id,
         leadId: lead.id,
@@ -252,10 +303,13 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     if (paused) {
       const conv = await findConversationHeader({ empresaId: empresa.id, telefono: event.from });
       const motivo = String(conv?.pausa_motivo || '').toLowerCase();
-      const esPausaReal = motivo === 'humano_respondio_desde_celular' || motivo === 'comando_ia_off';
+      const esPausaPorComando = motivo === 'comando_ia_off';
+      const esPausaHumana = motivo === 'humano_respondio_desde_celular';
+      const fueSaludoAutomatico = esPausaHumana && await hasRecentAutoGreetingFromMe({ empresaId: empresa.id, telefono: event.from });
+      const esPausaReal = esPausaPorComando || (esPausaHumana && !fueSaludoAutomatico);
       if (!esPausaReal) {
         await setConversationIaPaused({ empresaId: empresa.id, telefono: event.from, paused: false });
-        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_auto_reactivate_old_false_pause', payload: { event, motivo }, estado: 'ok' });
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_auto_reactivate_false_pause', payload: { event, motivo, fueSaludoAutomatico }, estado: 'ok' });
         paused = false;
       }
     }
@@ -273,6 +327,7 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
     ai.respuesta = cleanWhatsappAnswer(ai.respuesta);
     const updatedLead = await updateLeadFromAi(lead.id, ai);
+    await upsertLiveFardoPedido({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, aiData: ai, incomingText: event.text }).catch(() => null);
 
     const iaConversation = await saveConversation({
       empresaId: empresa.id,
@@ -286,11 +341,21 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
 
     const evoResponse = await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: ai.respuesta });
 
+    let evoQrResponse = null;
+    if (ai.enviar_qr && iaConfig?.qr_pago_url) {
+      evoQrResponse = await sendEvolutionImage({
+        instanceName: integration.instance_name || event.instanceName,
+        to: event.from,
+        image: iaConfig.qr_pago_url,
+        caption: iaConfig.qr_pago_texto || 'QR de pago'
+      }).catch((e) => ({ error: e.message }));
+    }
+
     await saveWebhookLog({
       empresaId: empresa.id,
       leadId: lead.id,
       evento: 'evolution_message_processed',
-      payload: { event, ai, evoResponse, updatedLeadId: updatedLead?.id, iaConversationId: iaConversation?.id },
+      payload: { event, ai, evoResponse, evoQrResponse, updatedLeadId: updatedLead?.id, iaConversationId: iaConversation?.id },
       estado: 'ok'
     });
 
