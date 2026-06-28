@@ -342,12 +342,15 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     const evoResponse = await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: ai.respuesta });
 
     let evoQrResponse = null;
-    if (ai.enviar_qr && iaConfig?.qr_pago_url) {
+    const textoClienteQR = String(event.text || '').toLowerCase();
+    const pidioQR = /\b(qr|q r|pago|pagar|pagarte|transferencia|reservar|reserva|m[ií]o|mio|case|anot(a|e|ame)|lo quiero)\b/i.test(textoClienteQR);
+    const qrPago = iaConfig?.qr_pago_url || iaConfig?.qr_img || iaConfig?.admin_config?.qr_pago_url || '';
+    if ((ai.enviar_qr || pidioQR) && qrPago) {
       evoQrResponse = await sendEvolutionImage({
         instanceName: integration.instance_name || event.instanceName,
         to: event.from,
-        image: iaConfig.qr_pago_url,
-        caption: iaConfig.qr_pago_texto || 'QR de pago'
+        image: qrPago,
+        caption: iaConfig.qr_pago_texto || iaConfig.qr_texto || 'QR de pago'
       }).catch((e) => ({ error: e.message }));
     }
 
