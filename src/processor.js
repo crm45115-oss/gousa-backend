@@ -19,6 +19,7 @@ const { extractIncomingEvents, sendWhatsAppText, markMessageRead } = require('./
 const { extractEvolutionMessages, sendEvolutionText, sendEvolutionImage, normalizeEvolutionEvent } = require('./evolution');
 const { supabase } = require('./supabaseClient');
 const { generateAiReply, cleanWhatsappAnswer } = require('./ai');
+const { onlyDigits } = require('./utils');
 
 
 function isLikelyAutoGreetingText(text = '') {
@@ -124,6 +125,11 @@ async function processIncomingEvent(event, fullPayload = {}) {
 
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
     ai.respuesta = cleanWhatsappAnswer(ai.respuesta);
+    // Si ya existe contexto, evita saludos repetidos en American Style.
+    const statePost = await getConversationStateLocal({ empresaId: empresa.id, telefono: event.from });
+    if (isAmericanStyle(empresa, iaConfig) && statePost?.estado && statePost.estado !== 'inicio') {
+      ai.respuesta = String(ai.respuesta || '').replace(/^\s*(¡?hola[^.!?]*[.!?]\s*)/i, '').trim() || ai.respuesta;
+    }
     const updatedLead = await updateLeadFromAi(lead.id, ai);
     await upsertLiveFardoPedido({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, aiData: ai, incomingText: event.text }).catch(() => null);
 
@@ -298,6 +304,140 @@ function esImagenSinTextoClaro(event) {
   return event?.type === 'image' && (!t || t === '[mensaje recibido]' || t === 'imagen' || t === '[image]');
 }
 
+function esDeliveryTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return t.includes('delivery') || t.includes('delibery') || t.includes('yango') ||
+    t.includes('mandamelo') || t.includes('mandamelo') || t.includes('envien') || t.includes('envies') || t.includes('enviame') ||
+    t.includes('envien por') || t.includes('envies por') || t.includes('enviar por') || t.includes('envio por') ||
+    t.includes('enviamelo') || t.includes('envíamelo') || t.includes('me lo envien') ||
+    t.includes('me lo envien') || t.includes('me lo mandan') || t.includes('a domicilio');
+}
+
+function esDepartamentoTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return t.includes('departamento') || t.includes('provincia') || t.includes('transportadora') ||
+    t.includes('flota') || t.includes('encomienda') || t.includes('terminal') ||
+    t.includes('a sucre') || t.includes('a la paz') || t.includes('a cochabamba') ||
+    t.includes('a beni') || t.includes('a oruro') || t.includes('a potosi') ||
+    t.includes('a tarija') || t.includes('a pando');
+}
+
+function esRecojoTrompilloTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return t.includes('trompillo') || t.includes('recojo') || t.includes('recoger') ||
+    t.includes('plaza') || t.includes('punto de recojo') || t.includes('paso a recoger');
+}
+
+function esMasTardeTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return t.includes('mas tarde') || t.includes('más tarde') || t.includes('luego pago') ||
+    t.includes('despues pago') || t.includes('después pago') || t.includes('te cancelo mas tarde') ||
+    t.includes('te cancelo más tarde') || t.includes('te pago luego') || t.includes('te aviso');
+}
+
+function isAmericanStyle(empresa = {}, iaConfig = {}) {
+  const txt = `${empresa?.rubro || ''} ${empresa?.nombre || ''} ${empresa?.nombre_comercial || ''} ${iaConfig?.nombre_comercial || ''}`.toLowerCase();
+  return txt.includes('american') || txt.includes('live_fardo') || txt.includes('venta_live_fardo') || txt.includes('fardo');
+}
+
+async function getConversationStateLocal({ empresaId, telefono }) {
+  const phone = onlyDigits(telefono);
+  try {
+    const { data, error } = await supabase
+      .from('conversation_state')
+      .select('*')
+      .eq('empresa_id', empresaId)
+      .eq('telefono', phone)
+      .maybeSingle();
+    if (!error && data) return data;
+  } catch (_) {}
+
+  // Respaldo si no se corrió SQL: infiere desde los últimos mensajes guardados.
+  try {
+    const since = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from('conversacion_mensajes')
+      .select('mensaje,tipo,payload,created_at,from_me')
+      .eq('empresa_id', empresaId)
+      .eq('telefono', phone)
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(25);
+    const rows = data || [];
+    for (const r of rows) {
+      const regla = r?.payload?.metadata?.regla_local || r?.payload?.metadata?.ai?.regla_local || '';
+      const msg = normalizeTextBasic(r.mensaje || '');
+      if (regla === 'delivery_datos' || msg.includes('direccion exacta')) return { estado: 'esperando_datos_delivery', metadata: {} };
+      if (regla === 'departamento_datos' || msg.includes('transportadora')) return { estado: 'esperando_datos_departamento', metadata: {} };
+      if (regla === 'comprobante_recibido' || msg.includes('recibimos tu comprobante')) return { estado: 'comprobante_recibido', metadata: {} };
+      if (regla === 'qr_directo' || msg.includes('envíame el comprobante') || msg.includes('enviame el comprobante')) return { estado: 'qr_enviado', metadata: {} };
+    }
+  } catch (_) {}
+  return { estado: 'inicio', metadata: {} };
+}
+
+async function setConversationStateLocal({ empresaId, leadId, telefono, estado, metadata = {} }) {
+  const phone = onlyDigits(telefono);
+  try {
+    const payload = {
+      empresa_id: empresaId,
+      lead_id: leadId || null,
+      telefono: phone,
+      estado,
+      metadata,
+      updated_at: new Date().toISOString()
+    };
+    const { error } = await supabase
+      .from('conversation_state')
+      .upsert(payload, { onConflict: 'empresa_id,telefono' });
+    if (error) throw error;
+  } catch (e) {
+    await saveWebhookLog({ empresaId, leadId, evento: 'conversation_state_upsert_error', payload: { telefono: phone, estado }, estado: 'error', error: e.message }).catch(() => null);
+  }
+}
+
+async function responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal, estadoNuevo = null }) {
+  if (estadoNuevo) await setConversationStateLocal({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, estado: estadoNuevo, metadata: { reglaLocal } });
+  await saveConversation({
+    empresaId: empresa.id,
+    leadId: lead.id,
+    telefono: event.from,
+    rol: 'ia',
+    mensaje: respuesta,
+    tipo: 'text',
+    metadata: { provider: 'evolution', regla_local: reglaLocal, from_me: true }
+  }).catch(() => null);
+  const evoResponse = await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: respuesta });
+  await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: `evolution_${reglaLocal}`, payload: { telefono: event.from }, estado: 'ok' }).catch(() => null);
+  return { ok: true, provider: 'evolution', telefono: event.from, lead_id: lead.id, respuesta, evolution: evoResponse };
+}
+
+async function responderDeliveryEvolution({ empresa, lead, event, integration }) {
+  const respuesta = 'Perfecto bella 😊 Para enviarte tu prenda por delivery, pásame por favor:\n\n• Nombre completo\n• Dirección exacta\n• Zona o barrio\n• Ubicación si puedes enviarla\n\nEl equipo revisará tu pago y coordina el envío contigo. 💜';
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'delivery_datos', estadoNuevo: 'esperando_datos_delivery' });
+}
+
+async function responderDepartamentoEvolution({ empresa, lead, event, integration, iaConfig = {} }) {
+  const costo = iaConfig?.costo_despacho_transportadora || 5;
+  const respuesta = `Sí bella 😊 hacemos envíos a departamentos o provincias. Para registrarlo, pásame por favor:\n\n• Nombre completo\n• Ciudad/departamento\n• Celular\n• Transportadora que prefieres\n\nSe cobra ${costo} Bs aparte por llevar tus prendas a la transportadora, más lo que cobre la transportadora por el envío.`;
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'departamento_datos', estadoNuevo: 'esperando_datos_departamento' });
+}
+
+async function responderRecojoTrompilloEvolution({ empresa, lead, event, integration, iaConfig = {} }) {
+  const horario = iaConfig?.horario_recojo || iaConfig?.reglas_entrega || 'lunes de 4:00 a 5:00 pm en la Plaza El Trompillo';
+  const respuesta = `Claro bella 😊 El recojo es ${horario}. Tu prenda queda registrada para recojo.`;
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'recojo_trompillo', estadoNuevo: 'entrega_trompillo' });
+}
+
+async function responderMasTardeEvolution({ empresa, lead, event, integration, state }) {
+  const estado = state?.estado || 'inicio';
+  const esAntigua = !['inicio', 'saludo'].includes(estado);
+  const respuesta = esAntigua
+    ? 'Perfecto bella 💜, tu prenda queda registrada.'
+    : 'Perfecto bella 😊. Para asegurar la prenda durante el live, te encargamos confirmar el pago dentro de 5 minutos o cada 3 prendas, así no pasa a otra clienta. Gracias por comprender 💜';
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'mas_tarde', estadoNuevo: estado || 'inicio' });
+}
+
 async function usuarioEstaConfirmandoQr({ empresaId, telefono, texto }) {
   const t = normalizeTextBasic(texto);
   const afirmativo = ['si','sí','si porfa','si por favor','dale','ok','okay','ya','claro','mandame','mándame','pasame','pásame'].some(x => t === normalizeTextBasic(x) || t.includes(normalizeTextBasic(x)));
@@ -321,6 +461,7 @@ async function usuarioEstaConfirmandoQr({ empresaId, telefono, texto }) {
 
 async function responderComprobanteEvolution({ empresa, lead, event, integration }) {
   const respuesta = 'Gracias bella 😊 recibimos tu comprobante. El equipo revisará el pago y te confirmará tu pedido.';
+  await setConversationStateLocal({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, estado: 'comprobante_recibido', metadata: { reglaLocal: 'comprobante_recibido' } });
   await saveConversation({
     empresaId: empresa.id,
     leadId: lead.id,
@@ -371,6 +512,7 @@ async function enviarQrEvolutionDirecto({ empresa, lead, event, integration, iaC
     metadata: { provider: 'evolution', regla_local: 'qr_directo', qrSource: qrCfg.source, from_me: true, qr_enviado: Boolean(qrCfg.qr) }
   }).catch(() => null);
   await upsertLiveFardoPedido({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, aiData: { enviar_qr: true, lead_updates: { etapa: 'qr_enviado', estado: 'esperando_comprobante' } }, incomingText: event.text }).catch(() => null);
+  await setConversationStateLocal({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, estado: 'qr_enviado', metadata: { qr_enviado: Boolean(qrCfg.qr), qrSource: qrCfg.source } });
   return { ok: true, provider: 'evolution', telefono: event.from, lead_id: lead.id, respuesta: respuestaTexto, qr_enviado: Boolean(qrCfg.qr), evolution: evoQrResponse };
 }
 
@@ -481,19 +623,38 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
       return { ok: true, skipped: true, reason: 'ia_pausada', telefono: event.from };
     }
 
-    // V16.24: reglas locales ANTES de llamar a la IA.
-    // Evita saludos repetidos y permite enviar QR aunque el modelo falle.
+    // V16.25: reglas locales con estado ANTES de llamar a la IA.
+    // Mantiene la venta fluida: QR -> comprobante -> entrega, sin volver a saludar ni reiniciar.
     const iaConfigPre = await getIaConfig(empresa.id).catch(() => ({}));
-    const pidioQRDirecto = pidioQrPago(event.text) || await usuarioEstaConfirmandoQr({ empresaId: empresa.id, telefono: event.from, texto: event.text });
-    if (pidioQRDirecto) {
-      return await enviarQrEvolutionDirecto({ empresa, lead, event, integration, iaConfig: iaConfigPre });
+    const state = await getConversationStateLocal({ empresaId: empresa.id, telefono: event.from });
+
+    if (esImagenSinTextoClaro(event)) {
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_image_saved_no_auto_reply', payload: { telefono: event.from, type: event.type, estado: state.estado }, estado: 'ok' }).catch(() => null);
+      return { ok: true, skipped: true, reason: 'imagen_guardada_sin_respuesta', telefono: event.from };
     }
+
     if (esComprobanteTexto(event.text)) {
       return await responderComprobanteEvolution({ empresa, lead, event, integration });
     }
-    if (esImagenSinTextoClaro(event)) {
-      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_image_saved_no_auto_reply', payload: { telefono: event.from, type: event.type }, estado: 'ok' }).catch(() => null);
-      return { ok: true, skipped: true, reason: 'imagen_guardada_sin_respuesta', telefono: event.from };
+
+    if (isAmericanStyle(empresa, iaConfigPre)) {
+      if (esDepartamentoTexto(event.text)) {
+        return await responderDepartamentoEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
+      }
+      if (esDeliveryTexto(event.text)) {
+        return await responderDeliveryEvolution({ empresa, lead, event, integration });
+      }
+      if (esRecojoTrompilloTexto(event.text)) {
+        return await responderRecojoTrompilloEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
+      }
+      if (esMasTardeTexto(event.text)) {
+        return await responderMasTardeEvolution({ empresa, lead, event, integration, state });
+      }
+    }
+
+    const pidioQRDirecto = pidioQrPago(event.text) || await usuarioEstaConfirmandoQr({ empresaId: empresa.id, telefono: event.from, texto: event.text });
+    if (pidioQRDirecto) {
+      return await enviarQrEvolutionDirecto({ empresa, lead, event, integration, iaConfig: iaConfigPre });
     }
 
     const [iaConfig, knowledge, history] = await Promise.all([
@@ -504,6 +665,11 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
 
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
     ai.respuesta = cleanWhatsappAnswer(ai.respuesta);
+    // Si ya existe contexto, evita saludos repetidos en American Style.
+    const statePost = await getConversationStateLocal({ empresaId: empresa.id, telefono: event.from });
+    if (isAmericanStyle(empresa, iaConfig) && statePost?.estado && statePost.estado !== 'inicio') {
+      ai.respuesta = String(ai.respuesta || '').replace(/^\s*(¡?hola[^.!?]*[.!?]\s*)/i, '').trim() || ai.respuesta;
+    }
     const updatedLead = await updateLeadFromAi(lead.id, ai);
     await upsertLiveFardoPedido({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, aiData: ai, incomingText: event.text }).catch(() => null);
 
