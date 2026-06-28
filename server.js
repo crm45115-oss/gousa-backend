@@ -405,15 +405,17 @@ app.post('/api/chats/send', requireDashboardKey, async (req, res) => {
 
 
 
-// V16.33: tomar/devolver conversación desde el panel sin que el refresh reactive la IA.
-app.post('/api/chats/take', requireDashboardKey, async (req, res) => {
+// V16.37: tomar/devolver conversación desde el panel sin que el refresh reactive la IA.
+// Compatibilidad: el frontend puede llamar /api/chats/take, /api/chats/control,
+// /api/chats/pause, /api/dashboard/chats/take o /api/whatsapp/chats/take.
+async function handleDashboardTakeChat(req, res) {
   try {
     const empresaId = req.body.empresaId || req.body.empresa_id;
     const telefono = onlyDigits(req.body.telefono || req.body.to || '');
-    const action = String(req.body.action || 'take').toLowerCase();
+    const action = String(req.body.action || req.body.estado || 'take').toLowerCase();
     if (!empresaId || !telefono) return res.status(400).json({ ok: false, error: 'Falta empresaId o telefono.' });
 
-    const paused = !['release', 'ia_on', 'devolver', 'activar_ia'].includes(action);
+    const paused = !['release', 'ia_on', 'devolver', 'activar_ia', 'resume', 'unpause', 'false'].includes(action);
     const lead = await upsertLead({ empresaId, telefono, waId: telefono, incomingText: paused ? 'Asesor tomó la conversación desde panel.' : 'IA reactivada desde panel.' });
     const conv = await setConversationIaPaused({
       empresaId,
@@ -432,13 +434,19 @@ app.post('/api/chats/take', requireDashboardKey, async (req, res) => {
       metadata: { dashboard_action: action, ia_pausada: paused, sent_from_dashboard: true }
     }).catch(() => null);
 
-    await saveWebhookLog({ empresaId, leadId: lead?.id || null, evento: paused ? 'dashboard_take_chat' : 'dashboard_release_chat', payload: { telefono, action }, estado: 'ok' }).catch(() => null);
+    await saveWebhookLog({ empresaId, leadId: lead?.id || null, evento: paused ? 'dashboard_take_chat' : 'dashboard_release_chat', payload: { telefono, action, path: req.path }, estado: 'ok' }).catch(() => null);
     res.json({ ok: true, ia_pausada: paused, conversation: conv });
   } catch (error) {
     console.error('[api/chats/take]', error);
     res.status(500).json({ ok: false, error: error.message });
   }
-});
+}
+
+app.post('/api/chats/take', requireDashboardKey, handleDashboardTakeChat);
+app.post('/api/chats/control', requireDashboardKey, handleDashboardTakeChat);
+app.post('/api/chats/pause', requireDashboardKey, handleDashboardTakeChat);
+app.post('/api/dashboard/chats/take', requireDashboardKey, handleDashboardTakeChat);
+app.post('/api/whatsapp/chats/take', requireDashboardKey, handleDashboardTakeChat);
 
 app.get('/api/bootstrap', requireDashboardKey, async (req, res) => {
   try {
