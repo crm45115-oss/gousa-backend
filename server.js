@@ -6,7 +6,7 @@ const { processWebhookPayload, simulateIncomingMessage, processEvolutionWebhookP
 const { supabase } = require('./src/supabaseClient');
 const { exchangeCodeForToken, upsertIntegration, getIntegrationStatus } = require('./src/metaSignup');
 const { safeInstanceName, createEvolutionInstance, setEvolutionWebhook, connectEvolutionInstance, getEvolutionState, logoutEvolutionInstance, extractQrFromEvolution, sendEvolutionText } = require('./src/evolution');
-const { getEmpresaByPhoneNumberId, saveConversation, upsertLead, saveWebhookLog } = require('./src/db');
+const { getEmpresaByPhoneNumberId, saveConversation, upsertLead, saveWebhookLog, setConversationIaPaused } = require('./src/db');
 const { onlyDigits } = require('./src/utils');
 const { enqueueWebhookJob, startQueueWorker, getQueueStatus, queueAvailable } = require('./src/messageQueue');
 
@@ -399,6 +399,43 @@ app.post('/api/chats/send', requireDashboardKey, async (req, res) => {
     res.json({ ok: true, evolution, conversation });
   } catch (error) {
     console.error('[api/chats/send]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+
+
+// V16.33: tomar/devolver conversación desde el panel sin que el refresh reactive la IA.
+app.post('/api/chats/take', requireDashboardKey, async (req, res) => {
+  try {
+    const empresaId = req.body.empresaId || req.body.empresa_id;
+    const telefono = onlyDigits(req.body.telefono || req.body.to || '');
+    const action = String(req.body.action || 'take').toLowerCase();
+    if (!empresaId || !telefono) return res.status(400).json({ ok: false, error: 'Falta empresaId o telefono.' });
+
+    const paused = !['release', 'ia_on', 'devolver', 'activar_ia'].includes(action);
+    const lead = await upsertLead({ empresaId, telefono, waId: telefono, incomingText: paused ? 'Asesor tomó la conversación desde panel.' : 'IA reactivada desde panel.' });
+    const conv = await setConversationIaPaused({
+      empresaId,
+      telefono,
+      paused,
+      motivo: paused ? 'asesor_tomo_desde_panel' : null
+    });
+
+    await saveConversation({
+      empresaId,
+      leadId: lead?.id || null,
+      telefono,
+      rol: 'sistema',
+      mensaje: paused ? 'Un asesor tomó la conversación.' : 'La IA volvió a quedar activa para este cliente.',
+      tipo: 'text',
+      metadata: { dashboard_action: action, ia_pausada: paused, sent_from_dashboard: true }
+    }).catch(() => null);
+
+    await saveWebhookLog({ empresaId, leadId: lead?.id || null, evento: paused ? 'dashboard_take_chat' : 'dashboard_release_chat', payload: { telefono, action }, estado: 'ok' }).catch(() => null);
+    res.json({ ok: true, ia_pausada: paused, conversation: conv });
+  } catch (error) {
+    console.error('[api/chats/take]', error);
     res.status(500).json({ ok: false, error: error.message });
   }
 });
