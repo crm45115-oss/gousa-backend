@@ -378,12 +378,14 @@ async function isConversationPaused({ empresaId, telefono }) {
   return true;
 }
 
-async function getConversationHistory(leadId, telefono, limit = 16) {
+async function getConversationHistory(leadId, telefono, limit = 16, empresaId = null) {
   const phone = onlyDigits(telefono);
-  const { data: msgRows, error: msgError } = await supabase
+  let msgQuery = supabase
     .from('conversacion_mensajes')
     .select('direccion,mensaje,tipo,created_at,from_me')
-    .eq('telefono', phone)
+    .eq('telefono', phone);
+  if (empresaId) msgQuery = msgQuery.eq('empresa_id', empresaId);
+  const { data: msgRows, error: msgError } = await msgQuery
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -397,6 +399,7 @@ async function getConversationHistory(leadId, telefono, limit = 16) {
   }
 
   let query = supabase.from('conversaciones').select('rol,mensaje,tipo,created_at').order('created_at', { ascending: false }).limit(limit);
+  if (empresaId) query = query.eq('empresa_id', empresaId);
   if (leadId) query = query.eq('lead_id', leadId); else query = query.eq('telefono', phone);
   const { data, error } = await query;
   if (error) console.error('[getConversationHistory]', error.message);

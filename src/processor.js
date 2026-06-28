@@ -119,7 +119,7 @@ async function processIncomingEvent(event, fullPayload = {}) {
     const [iaConfig, knowledge, history] = await Promise.all([
       getIaConfig(empresa.id),
       getKnowledge(empresa.id),
-      getConversationHistory(lead.id, event.from, 18)
+      getConversationHistory(lead.id, event.from, 18, empresa.id)
     ]);
 
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
@@ -350,7 +350,7 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     const [iaConfig, knowledge, history] = await Promise.all([
       getIaConfig(empresa.id),
       getKnowledge(empresa.id),
-      getConversationHistory(lead.id, event.from, 18)
+      getConversationHistory(lead.id, event.from, 18, empresa.id)
     ]);
 
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });

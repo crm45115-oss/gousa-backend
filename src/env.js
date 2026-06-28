@@ -43,6 +43,12 @@ const config = {
   deepseekApiKey: process.env.DEEPSEEK_API_KEY || '',
   deepseekModel: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
   deepseekBaseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
+  groqApiKey: process.env.GROQ_API_KEY || '',
+  groqModel: process.env.GROQ_MODEL || 'llama-3.1-8b-instant',
+  groqBaseUrl: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
+  openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
+  openrouterModel: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct:free',
+  openrouterBaseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
 
   dashboardApiKey: process.env.DASHBOARD_API_KEY || ''
 };

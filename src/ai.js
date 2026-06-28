@@ -444,18 +444,40 @@ ${jsonContract()}`.trim();
 
 async function generateAiReply(context) {
   const prompt = buildPrompt(context);
-  if (config.aiProvider === 'gemini' && config.geminiApiKey) return callGemini(prompt);
-  if (config.aiProvider === 'openai' && config.openaiApiKey) return callOpenAiCompatible(prompt, {
-    apiKey: config.openaiApiKey,
-    baseUrl: config.openaiBaseUrl,
-    model: config.openaiModel
-  });
-  if (config.aiProvider === 'deepseek' && config.deepseekApiKey) return callOpenAiCompatible(prompt, {
-    apiKey: config.deepseekApiKey,
-    baseUrl: config.deepseekBaseUrl,
-    model: config.deepseekModel
-  });
-  return mockReply(context);
+  const provider = String(config.aiProvider || 'auto').toLowerCase();
+  const attempts = [];
+
+  const addAttempt = (name, fn) => { if (!attempts.some(a => a.name === name)) attempts.push({ name, fn }); };
+
+  if (provider === 'groq' && config.groqApiKey) addAttempt('groq', () => callOpenAiCompatible(prompt, { apiKey: config.groqApiKey, baseUrl: config.groqBaseUrl, model: config.groqModel }));
+  if (provider === 'openrouter' && config.openrouterApiKey) addAttempt('openrouter', () => callOpenAiCompatible(prompt, { apiKey: config.openrouterApiKey, baseUrl: config.openrouterBaseUrl, model: config.openrouterModel, provider: 'openrouter' }));
+  if (provider === 'gemini' && config.geminiApiKey) addAttempt('gemini', () => callGemini(prompt));
+  if (provider === 'openai' && config.openaiApiKey) addAttempt('openai', () => callOpenAiCompatible(prompt, { apiKey: config.openaiApiKey, baseUrl: config.openaiBaseUrl, model: config.openaiModel }));
+  if (provider === 'deepseek' && config.deepseekApiKey) addAttempt('deepseek', () => callOpenAiCompatible(prompt, { apiKey: config.deepseekApiKey, baseUrl: config.deepseekBaseUrl, model: config.deepseekModel }));
+
+  // Orden recomendado para SaaS: Groq rápido, OpenRouter respaldo, Gemini como tercer respaldo.
+  if (config.groqApiKey) addAttempt('groq', () => callOpenAiCompatible(prompt, { apiKey: config.groqApiKey, baseUrl: config.groqBaseUrl, model: config.groqModel }));
+  if (config.openrouterApiKey) addAttempt('openrouter', () => callOpenAiCompatible(prompt, { apiKey: config.openrouterApiKey, baseUrl: config.openrouterBaseUrl, model: config.openrouterModel, provider: 'openrouter' }));
+  if (config.geminiApiKey) addAttempt('gemini', () => callGemini(prompt));
+  if (config.deepseekApiKey) addAttempt('deepseek', () => callOpenAiCompatible(prompt, { apiKey: config.deepseekApiKey, baseUrl: config.deepseekBaseUrl, model: config.deepseekModel }));
+
+  const errors = [];
+  for (const a of attempts) {
+    try {
+      const out = await a.fn();
+      out.provider_usado = a.name;
+      return out;
+    } catch (err) {
+      errors.push(`${a.name}: ${err.message || err}`);
+      console.warn('[AI_FALLBACK_ERROR]', a.name, err.message || err);
+    }
+  }
+
+  // Último respaldo: reglas locales del negocio. Así QR, entregas y Live no se caen por cuota de IA.
+  const local = mockReply(context);
+  local.provider_usado = 'reglas_locales';
+  local.motivo_derivacion = [local.motivo_derivacion, errors.join(' | ')].filter(Boolean).join(' | ').slice(0, 800);
+  return local;
 }
 
 async function callGemini(prompt) {
@@ -478,26 +500,50 @@ async function callGemini(prompt) {
   return normalizeAiResponse(text);
 }
 
-async function callOpenAiCompatible(prompt, { apiKey, baseUrl, model }) {
-  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      temperature: 0.35,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: 'Responde solo JSON válido para un webhook de WhatsApp.' },
-        { role: 'user', content: prompt }
-      ]
-    })
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error?.message || `AI HTTP ${response.status}`);
+async function callOpenAiCompatible(prompt, { apiKey, baseUrl, model, provider = '' }) {
+  const headers = { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
+  if (provider === 'openrouter') {
+    headers['HTTP-Referer'] = 'https://chatflow360ia.digital';
+    headers['X-Title'] = 'ChatFlow 360';
+  }
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const payloadBase = {
+    model,
+    temperature: 0.35,
+    messages: [
+      { role: 'system', content: 'Responde solo JSON válido para un webhook de WhatsApp.' },
+      { role: 'user', content: prompt }
+    ]
+  };
+
+  async function doRequest(withJsonFormat = true) {
+    const payload = withJsonFormat ? { ...payloadBase, response_format: { type: 'json_object' } } : payloadBase;
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const msg = data?.error?.message || data?.message || `AI HTTP ${response.status}`;
+      const err = new Error(msg);
+      err.status = response.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  }
+
+  let data;
+  try {
+    data = await doRequest(true);
+  } catch (err) {
+    const msg = String(err.message || '').toLowerCase();
+    if (provider === 'openrouter' && (err.status === 400 || msg.includes('response_format') || msg.includes('json_object'))) {
+      data = await doRequest(false);
+    } else {
+      throw err;
+    }
+  }
   const text = data?.choices?.[0]?.message?.content || '';
   return normalizeAiResponse(text);
 }
-
 
 function cleanWhatsappAnswer(value) {
   if (value === undefined || value === null) return '';
