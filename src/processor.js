@@ -217,19 +217,56 @@ async function updateEvolutionConnectionStatus(instanceName, payload = {}) {
 
 
 async function getQrPagoSeguro(empresaId, iaConfig = {}) {
-  let qr = iaConfig?.qr_pago_url || iaConfig?.qr_img || iaConfig?.admin_config?.qr_pago_url || '';
-  let texto = iaConfig?.qr_pago_texto || iaConfig?.qr_texto || 'QR de pago';
-  if (qr) return { qr, texto };
+  let qr =
+    iaConfig?.qr_imagen_url ||
+    iaConfig?.qr_pago_url ||
+    iaConfig?.qr_img ||
+    iaConfig?.admin_config?.qr_imagen_url ||
+    iaConfig?.admin_config?.qr_pago_url ||
+    iaConfig?.live_config?.qr_imagen_url ||
+    '';
+
+  let texto =
+    iaConfig?.texto_qr ||
+    iaConfig?.qr_pago_texto ||
+    iaConfig?.qr_texto ||
+    iaConfig?.live_config?.texto_qr ||
+    'Te paso el QR bella 😊 Cuando hagas el pago, envíame el comprobante para que el equipo lo revise.';
+
+  if (qr) return { qr, texto, source: 'ia_config' };
+
+  // Primero revisar la configuración real de tiendas Live/Fardo.
+  // Ahí está el texto_qr y desde V16.22 se guarda qr_imagen_url.
   try {
-    const { data } = await supabase
-      .from('empresa_admin_config')
-      .select('qr_pago_url,qr_pago_img,qr_pago_texto')
+    const { data, error } = await supabase
+      .from('live_fardo_config')
+      .select('qr_imagen_url,qr_storage_path,texto_qr,mensaje_comprobante')
       .eq('empresa_id', empresaId)
       .maybeSingle();
-    qr = data?.qr_pago_url || data?.qr_pago_img || '';
-    texto = data?.qr_pago_texto || texto;
+
+    if (!error && data) {
+      qr = data.qr_imagen_url || '';
+      texto = data.texto_qr || data.mensaje_comprobante || texto;
+      if (qr) return { qr, texto, source: 'live_fardo_config' };
+    }
   } catch (_) {}
-  return { qr, texto };
+
+  // Compatibilidad con versiones anteriores que guardaban formas de pago en empresa_admin_config.
+  try {
+    const { data, error } = await supabase
+      .from('empresa_admin_config')
+      .select('qr_imagen_url,qr_pago_url,qr_pago_img,qr_pago_texto')
+      .eq('empresa_id', empresaId)
+      .maybeSingle();
+
+    if (!error && data) {
+      qr = data.qr_imagen_url || data.qr_pago_url || data.qr_pago_img || '';
+      texto = data.qr_pago_texto || texto;
+      if (qr) return { qr, texto, source: 'empresa_admin_config' };
+    }
+  } catch (_) {}
+
+  return { qr: '', texto, source: 'not_configured' };
 }
 
 function pidioQrPago(texto = '') {
@@ -381,12 +418,12 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
         caption: qrCfg.texto || 'QR de pago'
       }).catch((e) => ({ error: e.message }));
       if (evoQrResponse?.error) {
-        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_image_error', payload: { error: evoQrResponse.error, hasQr: Boolean(qrCfg.qr) }, estado: 'error', error: evoQrResponse.error }).catch(() => null);
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_image_error', payload: { error: evoQrResponse.error, hasQr: Boolean(qrCfg.qr), qrSource: qrCfg.source }, estado: 'error', error: evoQrResponse.error }).catch(() => null);
       } else {
-        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_image_sent', payload: { telefono: event.from }, estado: 'ok' }).catch(() => null);
+        await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_image_sent', payload: { telefono: event.from, qrSource: qrCfg.source }, estado: 'ok' }).catch(() => null);
       }
     } else if ((ai.enviar_qr || pidioQR) && !qrCfg.qr) {
-      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_requested_but_not_configured', payload: { texto: event.text }, estado: 'error', error: 'QR no configurado en empresa_admin_config.qr_pago_url' }).catch(() => null);
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_requested_but_not_configured', payload: { texto: event.text }, estado: 'error', error: 'QR no configurado. Guarda una URL pública en live_fardo_config.qr_imagen_url o empresa_admin_config.qr_imagen_url' }).catch(() => null);
     }
 
     await saveWebhookLog({
