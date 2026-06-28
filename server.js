@@ -5,7 +5,7 @@ const { verifyMetaSignature, sendWhatsAppText } = require('./src/whatsapp');
 const { processWebhookPayload, simulateIncomingMessage, processEvolutionWebhookPayload } = require('./src/processor');
 const { supabase } = require('./src/supabaseClient');
 const { exchangeCodeForToken, upsertIntegration, getIntegrationStatus } = require('./src/metaSignup');
-const { safeInstanceName, createEvolutionInstance, setEvolutionWebhook, connectEvolutionInstance, getEvolutionState, logoutEvolutionInstance, extractQrFromEvolution } = require('./src/evolution');
+const { safeInstanceName, createEvolutionInstance, setEvolutionWebhook, connectEvolutionInstance, getEvolutionState, logoutEvolutionInstance, extractQrFromEvolution, sendEvolutionText } = require('./src/evolution');
 const { getEmpresaByPhoneNumberId, saveConversation, upsertLead, saveWebhookLog } = require('./src/db');
 const { onlyDigits } = require('./src/utils');
 
@@ -338,6 +338,46 @@ app.get('/api/chats', requireDashboardKey, async (req, res) => {
   }
 });
 
+
+// V16.26: enviar mensaje real desde el panel WhatsApp usando Evolution API y guardar en conversación.
+app.post('/api/chats/send', requireDashboardKey, async (req, res) => {
+  try {
+    const empresaId = req.body.empresaId || req.body.empresa_id;
+    const telefono = onlyDigits(req.body.to || req.body.telefono);
+    const text = String(req.body.text || req.body.mensaje || '').trim();
+    if (!empresaId || !telefono || !text) return res.status(400).json({ ok: false, error: 'Falta empresaId, telefono o mensaje.' });
+
+    const { data: integration, error: intErr } = await supabase
+      .from('whatsapp_integraciones')
+      .select('*')
+      .eq('empresa_id', empresaId)
+      .eq('provider', 'evolution')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (intErr) throw intErr;
+    const instanceName = integration?.instance_name || integration?.phone_number_id;
+    if (!instanceName) return res.status(400).json({ ok: false, error: 'Esta empresa no tiene instancia Evolution conectada.' });
+
+    const lead = await upsertLead({ empresaId, telefono, waId: telefono, incomingText: text });
+    const evolution = await sendEvolutionText({ instanceName, to: telefono, text });
+    const conversation = await saveConversation({
+      empresaId,
+      leadId: lead?.id || null,
+      telefono,
+      rol: 'asesor',
+      mensaje: text,
+      tipo: 'text',
+      metadata: { sent_from_dashboard: true, provider: 'evolution', instanceName, from_me: true, evolution }
+    });
+    await saveWebhookLog({ empresaId, leadId: lead?.id || null, evento: 'dashboard_send_evolution_text', payload: { telefono, text, evolution }, estado: 'ok' }).catch(() => null);
+    res.json({ ok: true, evolution, conversation });
+  } catch (error) {
+    console.error('[api/chats/send]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.get('/api/bootstrap', requireDashboardKey, async (req, res) => {
   try {
     const phoneNumberId = req.query.phoneNumberId || config.phoneNumberId;
@@ -371,6 +411,6 @@ app.get('/api/bootstrap', requireDashboardKey, async (req, res) => {
 app.use((_req, res) => res.status(404).json({ ok: false, error: 'Ruta no encontrada.' }));
 
 app.listen(config.port, () => {
-  console.log(`ChatFlow360 Backend V16.24 QR_CONTEXT_FINAL activo en puerto ${config.port}`);
+  console.log(`ChatFlow360 Backend V16.26 REAL_WHATSAPP_CONTEXT activo en puerto ${config.port}`);
   console.log(`Webhook Meta: ${config.publicBaseUrl || 'https://TU-BACKEND'}/webhook`);
 });

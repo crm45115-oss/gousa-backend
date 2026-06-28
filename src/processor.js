@@ -21,6 +21,13 @@ const { supabase } = require('./supabaseClient');
 const { generateAiReply, cleanWhatsappAnswer } = require('./ai');
 const { onlyDigits } = require('./utils');
 
+function cleanOutgoingText(text = '') {
+  return cleanWhatsappAnswer(String(text || ''))
+    .replace(/^\s*\{\s*$/,'')
+    .replace(/^\s*[\}\]]\s*$/,'')
+    .trim();
+}
+
 
 function isLikelyAutoGreetingText(text = '') {
   const t = String(text || '')
@@ -124,7 +131,7 @@ async function processIncomingEvent(event, fullPayload = {}) {
     ]);
 
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
-    ai.respuesta = cleanWhatsappAnswer(ai.respuesta);
+    ai.respuesta = cleanOutgoingText(ai.respuesta);
     // Si ya existe contexto, evita saludos repetidos en American Style.
     const statePost = await getConversationStateLocal({ empresaId: empresa.id, telefono: event.from });
     if (isAmericanStyle(empresa, iaConfig) && statePost?.estado && statePost.estado !== 'inicio') {
@@ -300,8 +307,7 @@ function esComprobanteTexto(texto = '') {
 }
 
 function esImagenSinTextoClaro(event) {
-  const t = normalizeTextBasic(event?.text || '');
-  return event?.type === 'image' && (!t || t === '[mensaje recibido]' || t === 'imagen' || t === '[image]');
+  return esEventoMedia(event) && !textoClaroEvento(event?.text || '');
 }
 
 function esDeliveryTexto(texto = '') {
@@ -325,7 +331,8 @@ function esDepartamentoTexto(texto = '') {
 function esRecojoTrompilloTexto(texto = '') {
   const t = normalizeTextBasic(texto);
   return t.includes('trompillo') || t.includes('recojo') || t.includes('recoger') ||
-    t.includes('plaza') || t.includes('punto de recojo') || t.includes('paso a recoger');
+    t.includes('plaza') || t.includes('punto de recojo') || t.includes('paso a recoger') ||
+    t.includes('entregas') || t.includes('entrega') || t.includes('agendar') || t.includes('agendarme');
 }
 
 function esMasTardeTexto(texto = '') {
@@ -397,6 +404,7 @@ async function setConversationStateLocal({ empresaId, leadId, telefono, estado, 
 }
 
 async function responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal, estadoNuevo = null }) {
+  respuesta = cleanOutgoingText(respuesta);
   if (estadoNuevo) await setConversationStateLocal({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, estado: estadoNuevo, metadata: { reglaLocal } });
   await saveConversation({
     empresaId: empresa.id,
@@ -413,19 +421,20 @@ async function responderTextoEvolution({ empresa, lead, event, integration, resp
 }
 
 async function responderDeliveryEvolution({ empresa, lead, event, integration }) {
-  const respuesta = 'Perfecto bella 😊 Para enviarte tu prenda por delivery, pásame por favor:\n\n• Nombre completo\n• Dirección exacta\n• Zona o barrio\n• Ubicación si puedes enviarla\n\nEl equipo revisará tu pago y coordina el envío contigo. 💜';
+  const respuesta = 'Claro bella 😊 Para enviarte tu prenda por delivery, pásame por favor:\n\n• Nombre completo\n• Dirección exacta\n• Zona o barrio\n• Ubicación si puedes enviarla\n\nApenas el equipo revise tu pago, coordinamos tu envío por aquí. 💜';
   return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'delivery_datos', estadoNuevo: 'esperando_datos_delivery' });
 }
 
 async function responderDepartamentoEvolution({ empresa, lead, event, integration, iaConfig = {} }) {
   const costo = iaConfig?.costo_despacho_transportadora || 5;
-  const respuesta = `Sí bella 😊 hacemos envíos a departamentos o provincias. Para registrarlo, pásame por favor:\n\n• Nombre completo\n• Ciudad/departamento\n• Celular\n• Transportadora que prefieres\n\nSe cobra ${costo} Bs aparte por llevar tus prendas a la transportadora, más lo que cobre la transportadora por el envío.`;
+  const respuesta = `Claro bella 😊 hacemos envíos a departamentos y provincias. Para registrarte tu envío, pásame por favor:\n\n• Nombre completo\n• Ciudad/departamento\n• Celular\n• Transportadora que prefieres\n\nSe cobra ${costo} Bs aparte por llevar tus prendas a la transportadora, más lo que cobre la transportadora por el envío. 💜`;
   return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'departamento_datos', estadoNuevo: 'esperando_datos_departamento' });
 }
 
 async function responderRecojoTrompilloEvolution({ empresa, lead, event, integration, iaConfig = {} }) {
-  const horario = iaConfig?.horario_recojo || iaConfig?.reglas_entrega || 'lunes de 4:00 a 5:00 pm en la Plaza El Trompillo';
-  const respuesta = `Claro bella 😊 El recojo es ${horario}. Tu prenda queda registrada para recojo.`;
+  const horario = iaConfig?.horario_recojo || iaConfig?.reglas_entrega || 'lunes de 4:00 p. m. a 5:00 p. m. en la Plaza El Trompillo';
+  const puntoRosa = iaConfig?.punto_rosa || iaConfig?.punto_rosa_info || 'Punto Rosa';
+  const respuesta = `Claro bella 😊 te espero el ${horario} para entregarte tu pedido.\n\nSi por algún motivo no logras llegar ese día, no te preocupes: tus prendas podrán quedar para recojo en ${puntoRosa}, coordinando previamente por este WhatsApp. 💜`;
   return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'recojo_trompillo', estadoNuevo: 'entrega_trompillo' });
 }
 
@@ -460,7 +469,7 @@ async function usuarioEstaConfirmandoQr({ empresaId, telefono, texto }) {
 }
 
 async function responderComprobanteEvolution({ empresa, lead, event, integration }) {
-  const respuesta = 'Gracias bella 😊 recibimos tu comprobante. El equipo revisará el pago y te confirmará tu pedido.';
+  const respuesta = cleanOutgoingText('Gracias bella 😊 recibimos tu comprobante. El equipo revisará el pago y te confirmará tu pedido.');
   await setConversationStateLocal({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, estado: 'comprobante_recibido', metadata: { reglaLocal: 'comprobante_recibido' } });
   await saveConversation({
     empresaId: empresa.id,
@@ -478,9 +487,9 @@ async function responderComprobanteEvolution({ empresa, lead, event, integration
 
 async function enviarQrEvolutionDirecto({ empresa, lead, event, integration, iaConfig = {} }) {
   const qrCfg = await getQrPagoSeguro(empresa.id, iaConfig);
-  const respuestaTexto = qrCfg.qr
+  const respuestaTexto = cleanOutgoingText(qrCfg.qr
     ? (qrCfg.texto || 'Te paso el QR bella 😊 Cuando hagas el pago, envíame el comprobante para que el equipo lo revise.')
-    : 'Bella 😊 aún no tengo un QR configurado para enviarte. El equipo lo revisará y te ayudará por aquí.';
+    : 'Bella 😊 aún no tengo un QR configurado para enviarte. El equipo lo revisará y te ayudará por aquí.');
 
   let evoQrResponse = null;
   if (qrCfg.qr) {
@@ -514,6 +523,69 @@ async function enviarQrEvolutionDirecto({ empresa, lead, event, integration, iaC
   await upsertLiveFardoPedido({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, aiData: { enviar_qr: true, lead_updates: { etapa: 'qr_enviado', estado: 'esperando_comprobante' } }, incomingText: event.text }).catch(() => null);
   await setConversationStateLocal({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, estado: 'qr_enviado', metadata: { qr_enviado: Boolean(qrCfg.qr), qrSource: qrCfg.source } });
   return { ok: true, provider: 'evolution', telefono: event.from, lead_id: lead.id, respuesta: respuestaTexto, qr_enviado: Boolean(qrCfg.qr), evolution: evoQrResponse };
+}
+
+
+function esEventoMedia(event = {}) {
+  const tipo = String(event?.type || '').toLowerCase();
+  const raw = event?.rawMessage || {};
+  const msg = raw.message || raw.messages || raw;
+  return ['image','video','document','audio','sticker'].includes(tipo) ||
+    Boolean(msg.imageMessage || msg.videoMessage || msg.documentMessage || msg.audioMessage || msg.stickerMessage || raw.messageType?.includes?.('image'));
+}
+
+function textoClaroEvento(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return t && !['[mensaje recibido]','imagen','[image]','foto','archivo recibido','[audio recibido]'].includes(t);
+}
+
+function esSinCapturaTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return (t.includes('no') && (t.includes('captura') || t.includes('sacar captura'))) ||
+    t.includes('no alcance') || t.includes('no pude sacar') || t.includes('se me paso') || t.includes('no tengo captura');
+}
+
+function esLinkLiveTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return t.includes('link') || t.includes('tiktok') || t.includes('live') || t.includes('transmision') || t.includes('en vivo') || t.includes('perdi el live') || t.includes('perdi la transmision');
+}
+
+function esAgendarRecojoTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return t.includes('agendar') || t.includes('agendarme') || t.includes('anotame para recoger') || t.includes('me anoto') || t.includes('voy a recoger');
+}
+
+function esUbicacionPrincipalTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return (t.includes('ubicacion') || t.includes('ubicación') || t.includes('direccion') || t.includes('dirección') || t.includes('donde estan')) &&
+    !t.includes('delivery') && !t.includes('yango') && !t.includes('departamento') && !t.includes('provincia') && !t.includes('trompillo');
+}
+
+async function responderSinCapturaEvolution({ empresa, lead, event, integration }) {
+  const respuesta = 'No te preocupes bella 😊 escríbenos en el Live para que vuelvan a mostrar la prenda y, cuando logres tomar la captura, me la envías por aquí para registrarla correctamente.';
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'sin_captura_prenda', estadoNuevo: 'esperando_captura_prenda' });
+}
+
+async function responderLinkLiveEvolution({ empresa, lead, event, integration, iaConfig = {} }) {
+  const link = iaConfig?.tiktok || iaConfig?.tiktok_live_url || iaConfig?.admin_config?.tiktok || 'https://www.tiktok.com/@americanstyle48?_r=1&_t=ZS-97ZzOKHmEXx';
+  const respuesta = `Claro bella 😊 te dejo el enlace oficial del Live de American Style:
+
+${link}
+
+Si deseas apartar una prenda, envíame la captura por aquí para registrarla correctamente. 💜`;
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'link_live_tiktok', estadoNuevo: 'live_detectado' });
+}
+
+async function responderUbicacionPrincipalEvolution({ empresa, lead, event, integration, iaConfig = {} }) {
+  const link = iaConfig?.ubicacion_principal_url || iaConfig?.ubicacion_local_url || iaConfig?.admin_config?.ubicacion_principal_url || iaConfig?.direccion || '';
+  const respuesta = link
+    ? `Claro bella 😊 te comparto nuestra ubicación para que puedas pasar a recoger tu pedido:
+
+${link}
+
+Cuando estés cerca, escríbenos por aquí para coordinar la entrega. 💜`
+    : 'Claro bella 😊 escríbenos por aquí antes de pasar a recoger para que el equipo te confirme la ubicación exacta.';
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'ubicacion_principal', estadoNuevo: 'entrega_recojo_local' });
 }
 
 async function processEvolutionIncomingEvent(event, fullPayload = {}) {
@@ -628,9 +700,10 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     const iaConfigPre = await getIaConfig(empresa.id).catch(() => ({}));
     const state = await getConversationStateLocal({ empresaId: empresa.id, telefono: event.from });
 
-    if (esImagenSinTextoClaro(event)) {
-      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_image_saved_no_auto_reply', payload: { telefono: event.from, type: event.type, estado: state.estado }, estado: 'ok' }).catch(() => null);
-      return { ok: true, skipped: true, reason: 'imagen_guardada_sin_respuesta', telefono: event.from };
+    // V16.26: una imagen sola NO es comprobante. Solo se responde si el texto/caption dice pago/comprobante.
+    if (esEventoMedia(event) && !esComprobanteTexto(event.text)) {
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_media_saved_no_auto_reply', payload: { telefono: event.from, type: event.type, texto: event.text, estado: state.estado }, estado: 'ok' }).catch(() => null);
+      return { ok: true, skipped: true, reason: 'media_guardada_sin_respuesta', telefono: event.from };
     }
 
     if (esComprobanteTexto(event.text)) {
@@ -638,14 +711,23 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     }
 
     if (isAmericanStyle(empresa, iaConfigPre)) {
+      if (esSinCapturaTexto(event.text)) {
+        return await responderSinCapturaEvolution({ empresa, lead, event, integration });
+      }
+      if (esLinkLiveTexto(event.text)) {
+        return await responderLinkLiveEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
+      }
       if (esDepartamentoTexto(event.text)) {
         return await responderDepartamentoEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
       }
       if (esDeliveryTexto(event.text)) {
         return await responderDeliveryEvolution({ empresa, lead, event, integration });
       }
-      if (esRecojoTrompilloTexto(event.text)) {
+      if (esAgendarRecojoTexto(event.text) || esRecojoTrompilloTexto(event.text)) {
         return await responderRecojoTrompilloEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
+      }
+      if (esUbicacionPrincipalTexto(event.text)) {
+        return await responderUbicacionPrincipalEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
       }
       if (esMasTardeTexto(event.text)) {
         return await responderMasTardeEvolution({ empresa, lead, event, integration, state });
@@ -664,7 +746,7 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     ]);
 
     const ai = await generateAiReply({ empresa, iaConfig, knowledge, lead, history, incomingText: event.text });
-    ai.respuesta = cleanWhatsappAnswer(ai.respuesta);
+    ai.respuesta = cleanOutgoingText(ai.respuesta);
     // Si ya existe contexto, evita saludos repetidos en American Style.
     const statePost = await getConversationStateLocal({ empresaId: empresa.id, telefono: event.from });
     if (isAmericanStyle(empresa, iaConfig) && statePost?.estado && statePost.estado !== 'inicio') {
