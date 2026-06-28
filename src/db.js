@@ -361,12 +361,32 @@ async function isRecentAiEcho({ empresaId, telefono, mensaje, seconds = 300 }) {
 
 async function setConversationIaPaused({ empresaId, telefono, paused = true, motivo = 'asesor_manual', pausaHasta = null }) {
   const phone = onlyDigits(telefono);
-  const existing = await findConversationHeader({ empresaId, telefono: phone });
-  if (!existing) return null;
+  let existing = await findConversationHeader({ empresaId, telefono: phone });
+
+  // V16.40: si el asesor toma un chat antes de que exista cabecera formal,
+  // la creamos para que la pausa quede guardada en backend y no sea solo visual.
+  if (!existing) {
+    existing = await upsertConversationHeader({
+      empresaId,
+      leadId: null,
+      telefono: phone,
+      mensaje: paused ? 'Un asesor tomó la conversación.' : 'IA activa.',
+      provider: 'evolution',
+      fromMe: true,
+      rol: 'sistema',
+      metadata: { created_for_pause: true }
+    });
+  }
+
+  const estado = paused
+    ? 'asesor_humano'
+    : (existing?.estado === 'asesor_humano' || existing?.estado === 'pausada' ? 'abierta' : (existing?.estado || 'abierta'));
+
   const { data, error } = await supabase.from('conversaciones').update({
     ia_pausada: paused,
     pausa_motivo: paused ? motivo : null,
     pausa_hasta: paused ? pausaHasta : null,
+    estado,
     unread_count: paused ? existing.unread_count : 0,
     updated_at: nowIso()
   }).eq('id', existing.id).select('*').single();

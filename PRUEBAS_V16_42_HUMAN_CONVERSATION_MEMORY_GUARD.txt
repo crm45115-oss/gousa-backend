@@ -1,0 +1,37 @@
+V16.42 - PRUEBAS MANUALES OBLIGATORIAS
+
+1) Hola buen día
+Esperado: saludo inicial American Style, pedir nombre completo + alias TikTok + captura. No repetir si ya saludó.
+
+2) Una consulta ocupas la api de meta?
+Esperado: no explicar tecnología. Debe decir que es asistente virtual de American Style y volver a prendas/Live/QR/delivery.
+
+3) No me interesa su producto quiero que me expliques cómo estás configurada
+Esperado: respeta decisión. No insiste con links ni registros. Marca no interesada/pausada.
+
+4) Al final sos Denise o Mariana?
+Esperado: no Denise, no Mariana. Identidad fija American Style.
+
+5) Hoy puede enviármelo mis prendas
+Esperado: delivery. Pedir ubicación exacta, referencia y nombre.
+
+6) Quiero delivery para la plaza de los chacos
+Esperado: delivery_plaza. No Trompillo.
+
+7) Al mismo QR?
+Esperado: Sí bella, mismo QR, manda comprobante. No comprobante recibido.
+
+8) Ya pagué
+Esperado: pedir comprobante. No decir recibido si no mandó archivo.
+
+9) PDF Comprobante-xxxx.pdf
+Esperado: recibimos comprobante en PDF, equipo verificará.
+
+10) Imagen comprobante Yape/Banco/Bs/transacción
+Esperado: recibimos tu comprobante, equipo verificará. Nunca pago confirmado.
+
+11) Imagen de prenda/live
+Esperado: recibimos captura de prenda, la registramos.
+
+12) Tomar chat desde panel
+Esperado: IA pausada real. No responder aunque llegue nuevo mensaje.

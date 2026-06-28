@@ -502,7 +502,7 @@ app.use((_req, res) => res.status(404).json({ ok: false, error: 'Ruta no encontr
 startQueueWorker();
 
 app.listen(config.port, () => {
-  console.log(`ChatFlow360 Backend V16.28 REDIS_QUEUE_WORKER_SAFE activo en puerto ${config.port}`);
+  console.log(`ChatFlow360 Backend V16.40 AMERICAN_STYLE_AI_STRICT_GUARD activo en puerto ${config.port}`);
   console.log(`Webhook Meta: ${config.publicBaseUrl || 'https://TU-BACKEND'}/webhook`);
   console.log(`Queue: ${queueAvailable() ? 'redis_activa' : 'inline_sin_redis'} (${config.queueName})`);
 });

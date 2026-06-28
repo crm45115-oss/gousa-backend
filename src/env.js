@@ -61,6 +61,11 @@ const config = {
   messageRetryLimit: Math.max(1, Number(process.env.MESSAGE_RETRY_LIMIT || 3)),
   messageRetryDelayMs: Math.max(1000, Number(process.env.MESSAGE_RETRY_DELAY_MS || 5000)),
 
+  // V16.42 - Respuesta humana: espera corta para agrupar mensajes seguidos
+  // y evitar que la IA conteste por palabra suelta.
+  aiReplyDelayMs: Math.max(0, Number(process.env.AI_REPLY_DELAY_MS || 9000)),
+  aiReplyDelayJitterMs: Math.max(0, Number(process.env.AI_REPLY_DELAY_JITTER_MS || 4000)),
+
   dashboardApiKey: process.env.DASHBOARD_API_KEY || ''
 };
 

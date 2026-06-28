@@ -1,0 +1,23 @@
+PRUEBAS V16.40 - American Style AI Strict Guard
+
+Validación estática y de sintaxis ejecutada:
+- npm run check en backend: OK
+- node --check script.js frontend: OK
+
+Casos obligatorios revisados:
+1. Hola buen día -> saludo inicial solo si estado inicio.
+2. Hoy puede enviármelo mis prendas -> delivery.
+3. Quiero delivery para la plaza de los chacos -> delivery_plaza, NO recojo Trompillo.
+4. Al mismo QR? -> pregunta QR, NO comprobante.
+5. A cuál QR? -> pregunta QR, NO comprobante.
+6. No logré sacar captura -> flujo sin captura.
+7. Quiero recoger el lunes -> recojo.
+8. Quiero envío a provincia -> envío departamento/provincia.
+9. Ya pagué -> pide comprobante, NO dice comprobante recibido.
+10. Envío imagen de prenda -> captura_prenda.
+11. Envío imagen de comprobante Yape -> comprobante_imagen si trae señales/caption OCR o si Vision API está configurada.
+12. Envío PDF Comprobante-xxxx.pdf -> comprobante_pdf.
+
+Nota técnica:
+- La detección visual profunda de imagen sin texto usa OpenAI/Gemini si hay OPENAI_API_KEY o GEMINI_API_KEY y Evolution entrega data:image/base64.
+- Si la imagen no trae texto/caption y no hay visión disponible, el sistema responde con pregunta segura para no inventar.
