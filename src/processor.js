@@ -715,7 +715,32 @@ function esSinCapturaTexto(texto = '') {
 
 function esLinkLiveTexto(texto = '') {
   const t = normalizeTextBasic(texto);
-  return t.includes('link') || t.includes('tiktok') || t.includes('live') || t.includes('transmision') || t.includes('en vivo') || t.includes('perdi el live') || t.includes('perdi la transmision');
+  // V16.32: NO usar t.includes('live') porque "delivery" contiene "live" y disparaba el link de TikTok.
+  // Solo enviar link del live cuando lo piden de forma clara.
+  if (esDeliveryTexto(t) || esDepartamentoTexto(t) || esOtraPlazaNoTrompillo(t)) return false;
+  return (
+    t.includes('link del live') ||
+    t.includes('link de live') ||
+    t.includes('link tiktok') ||
+    t.includes('link de tiktok') ||
+    t.includes('pasa el live') ||
+    t.includes('pasame el live') ||
+    t.includes('pásame el live') ||
+    t.includes('manda el live') ||
+    t.includes('mandame el live') ||
+    t.includes('mándame el live') ||
+    t.includes('perdi el live') ||
+    t.includes('perdí el live') ||
+    t.includes('perdi la transmision') ||
+    t.includes('perdí la transmisión') ||
+    t.includes('no encuentro el live') ||
+    t.includes('no encuentro su tiktok') ||
+    t.includes('cual es su tiktok') ||
+    t.includes('cuál es su tiktok') ||
+    t.includes('su tiktok') ||
+    t.includes('tiktok oficial') ||
+    t.includes('en vivo')
+  );
 }
 
 function esAgendarRecojoTexto(texto = '') {
@@ -897,14 +922,16 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
       if (esSinCapturaTexto(event.text)) {
         return await responderSinCapturaEvolution({ empresa, lead, event, integration });
       }
-      if (esLinkLiveTexto(event.text)) {
-        return await responderLinkLiveEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
-      }
+      // V16.32: prioridad correcta. Delivery/departamento antes de link del live.
+      // Ej: "quiero delivery para la plaza de los chacos" NO debe mandar TikTok.
       if (esDepartamentoTexto(event.text)) {
         return await responderDepartamentoEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
       }
       if (esDeliveryTexto(event.text)) {
         return await responderDeliveryEvolution({ empresa, lead, event, integration });
+      }
+      if (esLinkLiveTexto(event.text)) {
+        return await responderLinkLiveEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });
       }
       if (esAgendarRecojoTexto(event.text) || esRecojoTrompilloTexto(event.text)) {
         return await responderRecojoTrompilloEvolution({ empresa, lead, event, integration, iaConfig: iaConfigPre });

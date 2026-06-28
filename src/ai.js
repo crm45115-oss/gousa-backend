@@ -628,11 +628,13 @@ function mockReply({ incomingText, lead, empresa }) {
     const wantsDepto = ['departamento','provincia','interior','flota','transportadora','encomienda'].some(x => text.includes(x));
     const otraPlazaNoTrompillo = text.includes('plaza') && !text.includes('trompillo');
     const wantsYangoTrompillo = (text.includes('yango') || text.includes('delivery')) && text.includes('trompillo');
-    const wantsDelivery = otraPlazaNoTrompillo || (!wantsYangoTrompillo && ['delivery','yango','mandar','envia','envía','ubicacion','ubicación','llevar'].some(x => text.includes(x))); 
+    const wantsDelivery = otraPlazaNoTrompillo || (!wantsYangoTrompillo && ['delivery','delibery','yango','mandar','envia','envía','ubicacion','ubicación','llevar','domicilio'].some(x => text.includes(x))); 
     const wantsRecojo = !otraPlazaNoTrompillo && ['recojo','recoger','paso','trompillo','anotame','anótame','me anota'].some(x => text.includes(x));
     const noRecogio = ['no fui','no pude ir','no recogí','no recogi','punto rosa','donde esta mi pedido','dónde está mi pedido'].some(x => text.includes(x));
+    // V16.32: "delivery" contiene las letras "live". No usar text.includes('live') para detectar live.
+    const mentionsLiveReal = /(^|\s)(live|en vivo)(\s|$)/.test(text) || text.includes('del live') || text.includes('vengo del live');
 
-    if (text.includes('live') || text.includes('captura') || text.includes('mio') || text.includes('mío') || text.includes('quiero esa') || text.includes('quiero esta')) {
+    if (!wantsDelivery && !wantsDepto && !wantsRecojo && (mentionsLiveReal || text.includes('captura') || text.includes('mio') || text.includes('mío') || text.includes('quiero esa') || text.includes('quiero esta'))) {
       respuesta = 'Perfecto bella 😊 Envíame la captura de la prenda o el número del live para que el equipo verifique disponibilidad y precio.';
     }
     if (text.includes('precio') || text.includes('cuanto') || text.includes('cuánto')) {
