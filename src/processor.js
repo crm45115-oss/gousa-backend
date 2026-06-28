@@ -282,6 +282,98 @@ function pidioQrPago(texto = '') {
     t.includes('anot') || t.includes('lo quiero') || t.includes('quiero esa');
 }
 
+function normalizeTextBasic(texto = '') {
+  return String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function esComprobanteTexto(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return t.includes('comprobante') || t.includes('pague') || t.includes('pagado') ||
+    t.includes('transferi') || t.includes('deposito') || t.includes('depósito') ||
+    t.includes('recibo') || t.includes('voucher') || t.includes('captura de pago');
+}
+
+function esImagenSinTextoClaro(event) {
+  const t = normalizeTextBasic(event?.text || '');
+  return event?.type === 'image' && (!t || t === '[mensaje recibido]' || t === 'imagen' || t === '[image]');
+}
+
+async function usuarioEstaConfirmandoQr({ empresaId, telefono, texto }) {
+  const t = normalizeTextBasic(texto);
+  const afirmativo = ['si','sí','si porfa','si por favor','dale','ok','okay','ya','claro','mandame','mándame','pasame','pásame'].some(x => t === normalizeTextBasic(x) || t.includes(normalizeTextBasic(x)));
+  if (!afirmativo) return false;
+  try {
+    const since = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from('conversacion_mensajes')
+      .select('mensaje,from_me,created_at')
+      .eq('empresa_id', empresaId)
+      .eq('telefono', telefono)
+      .eq('from_me', true)
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    return (data || []).some(r => normalizeTextBasic(r.mensaje).includes('quieres que te envie el qr') || normalizeTextBasic(r.mensaje).includes('te envio el qr') || normalizeTextBasic(r.mensaje).includes('qr para pagar'));
+  } catch (_) {
+    return false;
+  }
+}
+
+async function responderComprobanteEvolution({ empresa, lead, event, integration }) {
+  const respuesta = 'Gracias bella 😊 recibimos tu comprobante. El equipo revisará el pago y te confirmará tu pedido.';
+  await saveConversation({
+    empresaId: empresa.id,
+    leadId: lead.id,
+    telefono: event.from,
+    rol: 'ia',
+    mensaje: respuesta,
+    tipo: 'text',
+    metadata: { provider: 'evolution', regla_local: 'comprobante_recibido', from_me: true }
+  }).catch(() => null);
+  const evoResponse = await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: respuesta });
+  await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_comprobante_respuesta_local', payload: { telefono: event.from }, estado: 'ok' }).catch(() => null);
+  return { ok: true, provider: 'evolution', telefono: event.from, lead_id: lead.id, respuesta, evolution: evoResponse };
+}
+
+async function enviarQrEvolutionDirecto({ empresa, lead, event, integration, iaConfig = {} }) {
+  const qrCfg = await getQrPagoSeguro(empresa.id, iaConfig);
+  const respuestaTexto = qrCfg.qr
+    ? (qrCfg.texto || 'Te paso el QR bella 😊 Cuando hagas el pago, envíame el comprobante para que el equipo lo revise.')
+    : 'Bella 😊 aún no tengo un QR configurado para enviarte. El equipo lo revisará y te ayudará por aquí.';
+
+  let evoQrResponse = null;
+  if (qrCfg.qr) {
+    try {
+      evoQrResponse = await sendEvolutionImage({
+        instanceName: integration.instance_name || event.instanceName,
+        to: event.from,
+        image: qrCfg.qr,
+        caption: respuestaTexto
+      });
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_image_sent_direct', payload: { telefono: event.from, qrSource: qrCfg.source, hasQr: true }, estado: 'ok' }).catch(() => null);
+    } catch (e) {
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_image_error_direct', payload: { telefono: event.from, qrSource: qrCfg.source }, estado: 'error', error: e.message }).catch(() => null);
+      // Si falla imagen, al menos avisa sin volver a saludar.
+      await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: respuestaTexto }).catch(() => null);
+    }
+  } else {
+    await sendEvolutionText({ instanceName: integration.instance_name || event.instanceName, to: event.from, text: respuestaTexto }).catch(() => null);
+    await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_qr_requested_but_not_configured_direct', payload: { telefono: event.from }, estado: 'error', error: 'QR no configurado en empresa_admin_config.qr_pago_url' }).catch(() => null);
+  }
+
+  await saveConversation({
+    empresaId: empresa.id,
+    leadId: lead.id,
+    telefono: event.from,
+    rol: 'ia',
+    mensaje: respuestaTexto,
+    tipo: qrCfg.qr ? 'image' : 'text',
+    metadata: { provider: 'evolution', regla_local: 'qr_directo', qrSource: qrCfg.source, from_me: true, qr_enviado: Boolean(qrCfg.qr) }
+  }).catch(() => null);
+  await upsertLiveFardoPedido({ empresaId: empresa.id, leadId: lead.id, telefono: event.from, aiData: { enviar_qr: true, lead_updates: { etapa: 'qr_enviado', estado: 'esperando_comprobante' } }, incomingText: event.text }).catch(() => null);
+  return { ok: true, provider: 'evolution', telefono: event.from, lead_id: lead.id, respuesta: respuestaTexto, qr_enviado: Boolean(qrCfg.qr), evolution: evoQrResponse };
+}
+
 async function processEvolutionIncomingEvent(event, fullPayload = {}) {
   let empresa = null;
   let lead = null;
@@ -387,6 +479,21 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
     if (paused) {
       await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_message_saved_ia_paused', payload: event, estado: 'ok' });
       return { ok: true, skipped: true, reason: 'ia_pausada', telefono: event.from };
+    }
+
+    // V16.24: reglas locales ANTES de llamar a la IA.
+    // Evita saludos repetidos y permite enviar QR aunque el modelo falle.
+    const iaConfigPre = await getIaConfig(empresa.id).catch(() => ({}));
+    const pidioQRDirecto = pidioQrPago(event.text) || await usuarioEstaConfirmandoQr({ empresaId: empresa.id, telefono: event.from, texto: event.text });
+    if (pidioQRDirecto) {
+      return await enviarQrEvolutionDirecto({ empresa, lead, event, integration, iaConfig: iaConfigPre });
+    }
+    if (esComprobanteTexto(event.text)) {
+      return await responderComprobanteEvolution({ empresa, lead, event, integration });
+    }
+    if (esImagenSinTextoClaro(event)) {
+      await saveWebhookLog({ empresaId: empresa.id, leadId: lead.id, evento: 'evolution_image_saved_no_auto_reply', payload: { telefono: event.from, type: event.type }, estado: 'ok' }).catch(() => null);
+      return { ok: true, skipped: true, reason: 'imagen_guardada_sin_respuesta', telefono: event.from };
     }
 
     const [iaConfig, knowledge, history] = await Promise.all([

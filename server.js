@@ -371,6 +371,6 @@ app.get('/api/bootstrap', requireDashboardKey, async (req, res) => {
 app.use((_req, res) => res.status(404).json({ ok: false, error: 'Ruta no encontrada.' }));
 
 app.listen(config.port, () => {
-  console.log(`la empresa Webhook Backend activo en puerto ${config.port}`);
+  console.log(`ChatFlow360 Backend V16.24 QR_CONTEXT_FINAL activo en puerto ${config.port}`);
   console.log(`Webhook Meta: ${config.publicBaseUrl || 'https://TU-BACKEND'}/webhook`);
 });
