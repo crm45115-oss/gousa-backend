@@ -310,13 +310,22 @@ function esImagenSinTextoClaro(event) {
   return esEventoMedia(event) && !textoClaroEvento(event?.text || '');
 }
 
+function esOtraPlazaNoTrompillo(texto = '') {
+  const t = normalizeTextBasic(texto);
+  return t.includes('plaza') && !t.includes('trompillo');
+}
+
 function esDeliveryTexto(texto = '') {
   const t = normalizeTextBasic(texto);
+  // V16.29: si menciona otra plaza distinta a Plaza El Trompillo, NO es recojo Trompillo.
+  // Se trata como delivery/ubicación a coordinar.
+  if (esOtraPlazaNoTrompillo(t)) return true;
   return t.includes('delivery') || t.includes('delibery') || t.includes('yango') ||
-    t.includes('mandamelo') || t.includes('mandamelo') || t.includes('envien') || t.includes('envies') || t.includes('enviame') ||
-    t.includes('envien por') || t.includes('envies por') || t.includes('enviar por') || t.includes('envio por') ||
-    t.includes('enviamelo') || t.includes('envíamelo') || t.includes('me lo envien') ||
-    t.includes('me lo envien') || t.includes('me lo mandan') || t.includes('a domicilio');
+    t.includes('mandamelo') || t.includes('mándamelo') || t.includes('envien') || t.includes('envies') || t.includes('enviame') ||
+    t.includes('envien por') || t.includes('envies por') || t.includes('enviar por') || t.includes('envio por') || t.includes('envío por') ||
+    t.includes('enviamelo') || t.includes('envíamelo') || t.includes('me lo envien') || t.includes('me lo envíen') ||
+    t.includes('me lo mandan') || t.includes('mandar a') || t.includes('llevar a') || t.includes('llevamelo') ||
+    t.includes('llévalo') || t.includes('a domicilio') || t.includes('quiero envio a') || t.includes('quiero envío a');
 }
 
 function esDepartamentoTexto(texto = '') {
@@ -330,9 +339,72 @@ function esDepartamentoTexto(texto = '') {
 
 function esRecojoTrompilloTexto(texto = '') {
   const t = normalizeTextBasic(texto);
-  return t.includes('trompillo') || t.includes('recojo') || t.includes('recoger') ||
-    t.includes('plaza') || t.includes('punto de recojo') || t.includes('paso a recoger') ||
-    t.includes('entregas') || t.includes('entrega') || t.includes('agendar') || t.includes('agendarme');
+  if (esOtraPlazaNoTrompillo(t)) return false;
+  // Solo Trompillo cuando lo piden claro. No usar cualquier palabra “plaza”.
+  return t.includes('trompillo') ||
+    t.includes('punto de recojo') ||
+    t.includes('recojo del lunes') ||
+    t.includes('entrega del live') ||
+    t.includes('entrega lunes') ||
+    t.includes('entregas del lunes') ||
+    t.includes('paso a recoger') ||
+    t.includes('voy a recoger') ||
+    t.includes('agendar') || t.includes('agendarme') ||
+    t.includes('anotame para recoger') || t.includes('anótame para recoger');
+}
+
+
+function extraerCiudadDepartamentoTexto(texto = '') {
+  const raw = String(texto || '');
+  const t = normalizeTextBasic(raw);
+  const deps = ['santa cruz','la paz','cochabamba','oruro','potosi','potosí','chuquisaca','sucre','tarija','beni','pando'];
+  const found = deps.find(d => t.includes(normalizeTextBasic(d)));
+  const transportes = ['trans copacabana','copacabana','trans bolivar','bolivar','trans 6 de octubre','6 de octubre','flota','encomienda','transportadora','terminal','expreso'];
+  const trans = transportes.find(d => t.includes(normalizeTextBasic(d)));
+  return { departamento: found || '', transportadora: trans || '' };
+}
+
+async function registrarTipoEntregaLocal({ empresa, lead, event, tipo, estado, incomingText = '', extra = {} }) {
+  const text = incomingText || event?.text || '';
+  const update = {
+    tipo_entrega: tipo,
+    estado_entrega: estado || 'pendiente_revision',
+    ultimo_mensaje: text,
+    ...extra
+  };
+  await updateLeadFromAi(lead.id, { lead_updates: update }).catch(() => null);
+  return upsertLiveFardoPedido({
+    empresaId: empresa.id,
+    leadId: lead.id,
+    telefono: event.from,
+    aiData: {
+      lead_updates: update,
+      regla_local: 'registrar_entrega_local'
+    },
+    incomingText: text
+  }).catch(() => null);
+}
+
+async function registrarDatosDeliveryLocal({ empresa, lead, event, tipo = 'delivery_normal' }) {
+  const text = String(event?.text || '').trim();
+  const extra = {
+    direccion_entrega: text,
+    ubicacion_entrega: /https?:\/\//i.test(text) || normalizeTextBasic(text).includes('maps') ? text : null
+  };
+  return registrarTipoEntregaLocal({ empresa, lead, event, tipo, estado: 'datos_recibidos_delivery', incomingText: text, extra });
+}
+
+async function registrarDatosDepartamentoLocal({ empresa, lead, event, iaConfig = {} }) {
+  const text = String(event?.text || '').trim();
+  const extraído = extraerCiudadDepartamentoTexto(text);
+  const extra = {
+    direccion_entrega: text,
+    ciudad_destino: extraído.departamento || null,
+    departamento_destino: extraído.departamento || null,
+    transportadora: extraído.transportadora || null,
+    costo_despacho_transportadora: iaConfig?.costo_despacho_transportadora || 5
+  };
+  return registrarTipoEntregaLocal({ empresa, lead, event, tipo: 'departamento_provincia', estado: 'datos_recibidos_departamento', incomingText: text, extra });
 }
 
 function esMasTardeTexto(texto = '') {
@@ -374,7 +446,7 @@ async function getConversationStateLocal({ empresaId, telefono }) {
     for (const r of rows) {
       const regla = r?.payload?.metadata?.regla_local || r?.payload?.metadata?.ai?.regla_local || '';
       const msg = normalizeTextBasic(r.mensaje || '');
-      if (regla === 'delivery_datos' || msg.includes('direccion exacta')) return { estado: 'esperando_datos_delivery', metadata: {} };
+      if (regla === 'delivery_datos' || regla === 'delivery_plaza_datos' || msg.includes('direccion exacta')) return { estado: 'esperando_datos_delivery', metadata: { reglaLocal: regla } };
       if (regla === 'departamento_datos' || msg.includes('transportadora')) return { estado: 'esperando_datos_departamento', metadata: {} };
       if (regla === 'comprobante_recibido' || msg.includes('recibimos tu comprobante')) return { estado: 'comprobante_recibido', metadata: {} };
       if (regla === 'qr_directo' || msg.includes('envíame el comprobante') || msg.includes('enviame el comprobante')) return { estado: 'qr_enviado', metadata: {} };
@@ -421,20 +493,62 @@ async function responderTextoEvolution({ empresa, lead, event, integration, resp
 }
 
 async function responderDeliveryEvolution({ empresa, lead, event, integration }) {
-  const respuesta = 'Claro bella 😊 Para enviarte tu prenda por delivery, pásame por favor:\n\n• Nombre completo\n• Dirección exacta\n• Zona o barrio\n• Ubicación si puedes enviarla\n\nApenas el equipo revise tu pago, coordinamos tu envío por aquí. 💜';
-  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'delivery_datos', estadoNuevo: 'esperando_datos_delivery' });
+  const t = normalizeTextBasic(event?.text || '');
+  const mencionaOtraPlaza = esOtraPlazaNoTrompillo(t);
+  const tipoEntrega = mencionaOtraPlaza ? 'delivery_plaza' : 'delivery_normal';
+  await registrarTipoEntregaLocal({
+    empresa,
+    lead,
+    event,
+    tipo: tipoEntrega,
+    estado: 'pendiente_datos_delivery',
+    incomingText: event?.text || '',
+    extra: { direccion_entrega: mencionaOtraPlaza ? event?.text : null }
+  });
+  const intro = mencionaOtraPlaza
+    ? 'Claro bella 😊 podemos enviártelo por delivery a esa plaza o ubicación. Para no confundirlo con Plaza El Trompillo, te pido que me mandes la ubicación exacta, zona y referencia.'
+    : 'Claro bella 😊 Para enviarte tu prenda por delivery, pásame por favor:';
+  const respuesta = `${intro}
+
+• Nombre completo
+• Dirección exacta
+• Zona o barrio
+• Referencia
+• Ubicación si puedes enviarla
+
+Apenas el equipo revise tu pago, coordinamos tu envío por aquí. 💜`;
+  return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: tipoEntrega === 'delivery_plaza' ? 'delivery_plaza_datos' : 'delivery_datos', estadoNuevo: 'esperando_datos_delivery' });
 }
 
 async function responderDepartamentoEvolution({ empresa, lead, event, integration, iaConfig = {} }) {
   const costo = iaConfig?.costo_despacho_transportadora || 5;
-  const respuesta = `Claro bella 😊 hacemos envíos a departamentos y provincias. Para registrarte tu envío, pásame por favor:\n\n• Nombre completo\n• Ciudad/departamento\n• Celular\n• Transportadora que prefieres\n\nSe cobra ${costo} Bs aparte por llevar tus prendas a la transportadora, más lo que cobre la transportadora por el envío. 💜`;
+  await registrarTipoEntregaLocal({
+    empresa,
+    lead,
+    event,
+    tipo: 'departamento_provincia',
+    estado: 'pendiente_datos_envio',
+    incomingText: event?.text || '',
+    extra: { costo_despacho_transportadora: costo }
+  });
+  const respuesta = `Claro bella 😊 hacemos envíos a departamentos y provincias. Para registrarte tu envío, pásame por favor:
+
+• Nombre completo
+• Ciudad/departamento
+• Celular
+• Transportadora que prefieres
+
+Se cobra ${costo} Bs aparte por llevar tus prendas a la transportadora, más lo que cobre la transportadora por el envío. 💜`;
   return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'departamento_datos', estadoNuevo: 'esperando_datos_departamento' });
 }
 
 async function responderRecojoTrompilloEvolution({ empresa, lead, event, integration, iaConfig = {} }) {
   const horario = iaConfig?.horario_recojo || iaConfig?.reglas_entrega || 'lunes de 4:00 p. m. a 5:00 p. m. en la Plaza El Trompillo';
   const puntoRosa = iaConfig?.punto_rosa || iaConfig?.punto_rosa_info || 'Punto Rosa';
-  const respuesta = `Claro bella 😊 te espero el ${horario} para entregarte tu pedido.\n\nSi por algún motivo no logras llegar ese día, no te preocupes: tus prendas podrán quedar para recojo en ${puntoRosa}, coordinando previamente por este WhatsApp. 💜`;
+  await registrarTipoEntregaLocal({ empresa, lead, event, tipo: 'recojo_trompillo', estado: 'pendiente_recojo', incomingText: event?.text || '', extra: { punto_entrega: 'Plaza El Trompillo' } });
+  const respuesta = `Claro bella 😊 te espero el ${horario} para entregarte tu pedido.
+
+Si por algún motivo no logras llegar ese día, no te preocupes: tus prendas podrán quedar para recojo en ${puntoRosa}, coordinando previamente por este WhatsApp. 💜`;
   return responderTextoEvolution({ empresa, lead, event, integration, respuesta, reglaLocal: 'recojo_trompillo', estadoNuevo: 'entrega_trompillo' });
 }
 
@@ -606,7 +720,8 @@ function esLinkLiveTexto(texto = '') {
 
 function esAgendarRecojoTexto(texto = '') {
   const t = normalizeTextBasic(texto);
-  return t.includes('agendar') || t.includes('agendarme') || t.includes('anotame para recoger') || t.includes('me anoto') || t.includes('voy a recoger');
+  if (esOtraPlazaNoTrompillo(t)) return false;
+  return t.includes('agendar') || t.includes('agendarme') || t.includes('anotame para recoger') || t.includes('anótame para recoger') || t.includes('me anoto') || t.includes('voy a recoger');
 }
 
 function esUbicacionPrincipalTexto(texto = '') {
@@ -770,6 +885,15 @@ async function processEvolutionIncomingEvent(event, fullPayload = {}) {
         return { ok: true, skipped: true, reason: 'media_guardada_sin_respuesta', telefono: event.from };
       }
 
+      if (String(state?.estado || '') === 'esperando_datos_delivery' && textoClaroEvento(event.text)) {
+        const tipoPendiente = state?.metadata?.reglaLocal === 'delivery_plaza_datos' ? 'delivery_plaza' : 'delivery_normal';
+        await registrarDatosDeliveryLocal({ empresa, lead, event, tipo: tipoPendiente });
+        return await responderTextoEvolution({ empresa, lead, event, integration, respuesta: 'Perfecto bella 😊 ya anoté tus datos de entrega. El equipo verificará el pago y coordinará el envío por este WhatsApp. 💜', reglaLocal: 'delivery_datos_recibidos', estadoNuevo: 'datos_delivery_recibidos' });
+      }
+      if (String(state?.estado || '') === 'esperando_datos_departamento' && textoClaroEvento(event.text)) {
+        await registrarDatosDepartamentoLocal({ empresa, lead, event, iaConfig: iaConfigPre });
+        return await responderTextoEvolution({ empresa, lead, event, integration, respuesta: 'Perfecto bella 😊 ya anoté tus datos para envío a departamento/provincia. El equipo preparará tus prendas y te confirmará la guía o transportadora por aquí. 💜', reglaLocal: 'departamento_datos_recibidos', estadoNuevo: 'datos_departamento_recibidos' });
+      }
       if (esSinCapturaTexto(event.text)) {
         return await responderSinCapturaEvolution({ empresa, lead, event, integration });
       }

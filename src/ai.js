@@ -238,6 +238,7 @@ CUANDO CLASIFIQUES ENTREGA USA lead_updates.tipo_entrega EXACTAMENTE:
 - recojo_trompillo
 - yango_desde_trompillo
 - delivery_normal
+- delivery_plaza
 - departamento_provincia
 - punto_rosa
 - acumulado
@@ -285,8 +286,8 @@ CONFIGURACIÓN EDITABLE DE ENTREGA/PAGO DE ESTA TIENDA:
 
 FLUJOS OBLIGATORIOS:
 - NO digas reglas de entrega en el primer mensaje. Solo úsalas si la clienta pregunta o elige una forma de entrega.
-- Si pregunta “dónde entregan”, “me anotas”, “recojo”, responde que el recojo es en Plaza El Trompillo lunes de 4:00 a 5:00 p. m. y marca tipo_entrega=recojo_trompillo.
-- Si pide Yango desde la plaza o quiere que se lo envíen desde el Trompillo, explica que puede ser el lunes desde Plaza El Trompillo para abaratar costo y pide ubicación. Marca tipo_entrega=yango_desde_trompillo.
+- Solo responde Plaza El Trompillo si el cliente menciona claramente Trompillo, recojo del lunes, entrega del live, punto de entrega del lunes o quiere agendar recojo del live. NO tomes cualquier palabra “plaza” como Trompillo.
+- Si pide envío/delivery/mandar/llevar a otra plaza o ubicación diferente a Trompillo, trátalo como delivery a otra plaza/ubicación, pide ubicación exacta, zona y referencia. Marca tipo_entrega=delivery_plaza.
 - Si pide delivery/Yango normal, pide ubicación o dirección exacta y referencia. Marca tipo_entrega=delivery_normal.
 - Si pide departamento, provincia o interior, explica que sí se envía y que se cobran 5 Bs por dejar en transportadora, aparte de lo que cobre la transportadora. Pide poco a poco: nombre completo, ciudad/provincia/departamento, celular y transportadora preferida. Marca tipo_entrega=departamento_provincia.
 - Si no recogió y pregunta por su pedido, responde que puede pasar a Punto Rosa y que Punto Rosa cobra por semana según el bulto/bolsa; no inventes monto. Marca tipo_entrega=punto_rosa si corresponde.
@@ -333,6 +334,7 @@ CUANDO CLASIFIQUES ENTREGA USA lead_updates.tipo_entrega EXACTAMENTE:
 - recojo_trompillo
 - yango_desde_trompillo
 - delivery_normal
+- delivery_plaza
 - departamento_provincia
 - punto_rosa
 - acumulado
@@ -374,6 +376,7 @@ CUANDO CLASIFIQUES ENTREGA USA lead_updates.tipo_entrega EXACTAMENTE:
 - recojo_trompillo
 - yango_desde_trompillo
 - delivery_normal
+- delivery_plaza
 - departamento_provincia
 - punto_rosa
 - acumulado
@@ -431,6 +434,7 @@ CUANDO CLASIFIQUES ENTREGA USA lead_updates.tipo_entrega EXACTAMENTE:
 - recojo_trompillo
 - yango_desde_trompillo
 - delivery_normal
+- delivery_plaza
 - departamento_provincia
 - punto_rosa
 - acumulado
@@ -622,9 +626,10 @@ function mockReply({ incomingText, lead, empresa }) {
 
     const wantsPago = ['qr','pago','pagar','transferencia','reservar','reservo','apartar','compro'].some(x => text.includes(x));
     const wantsDepto = ['departamento','provincia','interior','flota','transportadora','encomienda'].some(x => text.includes(x));
-    const wantsYangoTrompillo = (text.includes('yango') || text.includes('delivery')) && (text.includes('trompillo') || text.includes('plaza'));
-    const wantsDelivery = !wantsYangoTrompillo && ['delivery','yango','mandar','envia','envía','ubicacion','ubicación'].some(x => text.includes(x));
-    const wantsRecojo = ['recojo','recoger','paso','plaza','trompillo','anotame','anótame','me anota'].some(x => text.includes(x));
+    const otraPlazaNoTrompillo = text.includes('plaza') && !text.includes('trompillo');
+    const wantsYangoTrompillo = (text.includes('yango') || text.includes('delivery')) && text.includes('trompillo');
+    const wantsDelivery = otraPlazaNoTrompillo || (!wantsYangoTrompillo && ['delivery','yango','mandar','envia','envía','ubicacion','ubicación','llevar'].some(x => text.includes(x))); 
+    const wantsRecojo = !otraPlazaNoTrompillo && ['recojo','recoger','paso','trompillo','anotame','anótame','me anota'].some(x => text.includes(x));
     const noRecogio = ['no fui','no pude ir','no recogí','no recogi','punto rosa','donde esta mi pedido','dónde está mi pedido'].some(x => text.includes(x));
 
     if (text.includes('live') || text.includes('captura') || text.includes('mio') || text.includes('mío') || text.includes('quiero esa') || text.includes('quiero esta')) {
@@ -643,7 +648,7 @@ function mockReply({ incomingText, lead, empresa }) {
       upd.estado_entrega = 'pendiente_ubicacion';
       respuesta = 'Claro bella 😊 También podemos enviártelo por Yango desde la Plaza El Trompillo el lunes, así suele salir más económico. Envíame tu ubicación para anotarte.';
     } else if (wantsDelivery) {
-      upd.tipo_entrega = 'delivery_normal';
+      upd.tipo_entrega = otraPlazaNoTrompillo ? 'delivery_plaza' : 'delivery_normal';
       upd.estado_entrega = 'pendiente_ubicacion';
       respuesta = 'Claro bella 😊 Para delivery/Yango necesito que me mandes tu ubicación o dirección exacta con referencia. El equipo calcula el costo y coordina el envío.';
     }
