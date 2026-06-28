@@ -218,53 +218,58 @@ async function updateEvolutionConnectionStatus(instanceName, payload = {}) {
 
 async function getQrPagoSeguro(empresaId, iaConfig = {}) {
   let qr =
-    iaConfig?.qr_imagen_url ||
     iaConfig?.qr_pago_url ||
+    iaConfig?.qr_imagen_url ||
     iaConfig?.qr_img ||
-    iaConfig?.admin_config?.qr_imagen_url ||
     iaConfig?.admin_config?.qr_pago_url ||
-    iaConfig?.live_config?.qr_imagen_url ||
+    iaConfig?.admin_config?.qr_imagen_url ||
+    iaConfig?.admin_config?.qr_pago_img ||
     '';
 
   let texto =
-    iaConfig?.texto_qr ||
     iaConfig?.qr_pago_texto ||
+    iaConfig?.texto_qr ||
     iaConfig?.qr_texto ||
+    iaConfig?.admin_config?.qr_pago_texto ||
     iaConfig?.live_config?.texto_qr ||
     'Te paso el QR bella 😊 Cuando hagas el pago, envíame el comprobante para que el equipo lo revise.';
 
-  if (qr) return { qr, texto, source: 'ia_config' };
+  if (qr) return { qr, texto, source: 'ia_config_admin' };
 
-  // Primero revisar la configuración real de tiendas Live/Fardo.
-  // Ahí está el texto_qr y desde V16.22 se guarda qr_imagen_url.
-  try {
-    const { data, error } = await supabase
-      .from('live_fardo_config')
-      .select('qr_imagen_url,qr_storage_path,texto_qr,mensaje_comprobante')
-      .eq('empresa_id', empresaId)
-      .maybeSingle();
-
-    if (!error && data) {
-      qr = data.qr_imagen_url || '';
-      texto = data.texto_qr || data.mensaje_comprobante || texto;
-      if (qr) return { qr, texto, source: 'live_fardo_config' };
-    }
-  } catch (_) {}
-
-  // Compatibilidad con versiones anteriores que guardaban formas de pago en empresa_admin_config.
+  // V16.23: el panel Formas de pago guarda el QR en empresa_admin_config.qr_pago_url.
+  // Esta tabla es la fuente principal para evitar duplicar el QR en live_fardo_config.
   try {
     const { data, error } = await supabase
       .from('empresa_admin_config')
-      .select('qr_imagen_url,qr_pago_url,qr_pago_img,qr_pago_texto')
+      .select('*')
       .eq('empresa_id', empresaId)
       .maybeSingle();
 
     if (!error && data) {
-      qr = data.qr_imagen_url || data.qr_pago_url || data.qr_pago_img || '';
-      texto = data.qr_pago_texto || texto;
-      if (qr) return { qr, texto, source: 'empresa_admin_config' };
+      qr = data.qr_pago_url || data.qr_imagen_url || data.qr_pago_img || data.qr_url || data.imagen_qr || '';
+      texto = data.qr_pago_texto || data.texto_qr || texto;
+      if (qr) return { qr, texto, source: 'empresa_admin_config.qr_pago_url' };
     }
-  } catch (_) {}
+  } catch (e) {
+    await saveWebhookLog({ empresaId, evento: 'qr_empresa_admin_config_read_error', payload: {}, estado: 'error', error: e.message }).catch(() => null);
+  }
+
+  // Respaldo para versiones que guardan QR en live_fardo_config.
+  try {
+    const { data, error } = await supabase
+      .from('live_fardo_config')
+      .select('*')
+      .eq('empresa_id', empresaId)
+      .maybeSingle();
+
+    if (!error && data) {
+      qr = data.qr_imagen_url || data.qr_pago_url || data.qr_url || data.imagen_qr || data.qr_storage_path || '';
+      texto = data.texto_qr || data.mensaje_comprobante || texto;
+      if (qr) return { qr, texto, source: 'live_fardo_config' };
+    }
+  } catch (e) {
+    await saveWebhookLog({ empresaId, evento: 'qr_live_fardo_config_read_error', payload: {}, estado: 'error', error: e.message }).catch(() => null);
+  }
 
   return { qr: '', texto, source: 'not_configured' };
 }
